@@ -13,5 +13,8 @@ namespace Talky.LabAPI
         
         [Description("Time in milliseconds for the mouth to reset to default after the player stops talking. Default is 500ms.")]
         public int EmotionResetTime { get; set; } = 500;
+        
+        [Description("Default emotion to use when the player is not talking. Options are: Angry, AwkwardSmile, Chad, Happy, Neutral, Ogre, Scared.")]
+        public string DefaultEmotion { get; set; } = "Neutral";
     }
 }

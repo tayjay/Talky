@@ -31,7 +31,7 @@ namespace Talky.LabAPI
         public override string Name { get; } = "Talky.LabAPI";
         public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";
         public override string Author { get; } = "TayTay";
-        public override Version Version { get; } = new Version(0, 1, 0, 0);
+        public override Version Version { get; } = new Version(0, 1, 1, 0);
         public override Version RequiredApiVersion { get; } = new Version(LabApiProperties.CompiledVersion);
     }
 }

@@ -24,9 +24,9 @@ namespace Talky.LabAPI
                 return false;
             }
 
-            string emotion = arguments.At(0).ToLower();
+            string emotion = arguments.At(0);
             Player player = Player.Get(sender);
-            if (EmotionPresetType.TryParse(emotion, out EmotionPresetType preset))
+            if (Enum.TryParse<EmotionPresetType>(emotion, out EmotionPresetType preset))
             {
                 player.ReferenceHub.ServerSetEmotionPreset(preset);
                 if (player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))

@@ -41,6 +41,15 @@ namespace Talky.LabAPI
             LastLevel = -1;
             buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             TopVolume = 0.03f;
+            if(Enum.TryParse<EmotionPresetType>(Plugin.Instance.Config!.DefaultEmotion, out var preset))
+            {
+                DefaultPreset = preset;
+                player.ReferenceHub.ServerSetEmotionPreset(DefaultPreset);
+            }
+            else
+            {
+                DefaultPreset = EmotionPresetType.Neutral;
+            }
         }
 	
         // Update is called once per frame
@@ -54,8 +63,6 @@ namespace Talky.LabAPI
                 !characterModelInstance.TryGetSubcontroller<EmotionSubcontroller>(out subcontroller))
             {
                 // Non-animated character model speaking
-                //ev.Player.ShowHint("You cannot animate",1f);
-                Logger.Debug("No animated model for " + player.Nickname);
                 return;
             }
             
@@ -67,7 +74,7 @@ namespace Talky.LabAPI
                 {
                     hub.ServerSetEmotionPreset(DefaultPreset);
                     LastLevel = -1;
-                    Logger.Info("Set "+ DefaultPreset+" for " + player.Nickname);
+                    //Logger.Info("Set "+ DefaultPreset+" for " + player.Nickname);
                 }
                 
             }
@@ -109,7 +116,7 @@ namespace Talky.LabAPI
             
             } catch (Exception e)
             {
-                Logger.Error(e);
+                //Logger.Error(e);
             }
         }
 
