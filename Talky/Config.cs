@@ -1,8 +1,13 @@
 ﻿using System.ComponentModel;
 
-namespace Talky.LabAPI
+namespace Talky
 {
-    public class Config
+#if EXILED
+    public class Config : Exiled.API.Interfaces.IConfig
+#else
+    public class Config 
+#endif
+    
     {
         
         [Description("Low volume threshold for voice activation. If the volume is below this value, the player will show their mouth closed.")]
@@ -16,5 +21,12 @@ namespace Talky.LabAPI
         
         [Description("Default emotion to use when the player is not talking. Options are: Angry, AwkwardSmile, Chad, Happy, Neutral, Ogre, Scared.")]
         public string DefaultEmotion { get; set; } = "Neutral";
+        
+        [Description("How to calculate the voice volume. Options are Average and Peak. You will need to tweak your thresholds if you use Peak.")]
+        public string CalculationType { get; set; } = "Average";
+#if EXILED
+        public bool IsEnabled { get; set; } = true;
+        public bool Debug { get; set; } = false;
+#endif
     }
 }

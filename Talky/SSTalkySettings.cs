@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UserSettings.ServerSpecific;
 using UserSettings.ServerSpecific.Examples;
 
-namespace Talky.LabAPI
+namespace Talky
 {
     public class SSTalkySettings : SSTextAreaExample
     {

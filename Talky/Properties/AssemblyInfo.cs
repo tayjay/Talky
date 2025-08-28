@@ -4,11 +4,11 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("Talky.LabAPI")]
+[assembly: AssemblyTitle("Talky")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("TayTay")]
-[assembly: AssemblyProduct("Talky.LabAPI")]
+[assembly: AssemblyProduct("Talky")]
 [assembly: AssemblyCopyright("Copyright © TayTay 2025")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
