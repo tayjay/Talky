@@ -1,22 +1,18 @@
 ﻿using System;
-using System.Diagnostics;
-using GameCore;
+using Exiled.API.Features;
 using LabApi.Events.Arguments.PlayerEvents;
-using LabApi.Events.Arguments.ServerEvents;
-using LabApi.Features.Console;
-using LabApi.Features.Enums;
-using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.PlayableScps.Scp3114;
 using PlayerRoles.Voice;
+using UnityEngine;
 using VoiceChat;
 using VoiceChat.Codec;
 
-namespace Talky.LabAPI
-{
-    public class VoiceChattingHandler
+namespace Talky.EXILED;
+
+public class VoiceChattingHandler
     {
         public void OnVoiceMessageSending(PlayerSendingVoiceMessageEventArgs ev)
         { 
@@ -111,6 +107,7 @@ namespace Talky.LabAPI
                     int len = decoder.Decode(ev.Message.Data, ev.Message.DataLength, samples);
                     tracker.buffer.Write(samples,len);
                     tracker.LastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    
                 }
             } else if (ev.Player.VoiceModule is Scp3114VoiceModule scp3114VoiceModule && ev.Message.Channel == VoiceChatChannel.Proximity)
             {
@@ -159,4 +156,3 @@ namespace Talky.LabAPI
             LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
         }
     }
-}

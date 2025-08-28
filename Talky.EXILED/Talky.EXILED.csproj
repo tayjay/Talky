@@ -5,11 +5,11 @@
     <PropertyGroup>
         <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
         <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-        <ProjectGuid>{2E2D2E00-82AF-4B6B-820C-4803490F47DE}</ProjectGuid>
+        <ProjectGuid>{A5FCA766-D736-4C97-BBEB-BBBF82930C54}</ProjectGuid>
         <OutputType>Library</OutputType>
         <AppDesignerFolder>Properties</AppDesignerFolder>
-        <RootNamespace>Talky.LabAPI</RootNamespace>
-        <AssemblyName>Talky.LabAPI</AssemblyName>
+        <RootNamespace>Talky.EXILED</RootNamespace>
+        <AssemblyName>Talky.EXILED</AssemblyName>
         <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
         <FileAlignment>512</FileAlignment>
         <LangVersion>latest</LangVersion>
@@ -23,7 +23,6 @@
         <DefineConstants>DEBUG;TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
@@ -33,26 +32,43 @@
         <DefineConstants>TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <ItemGroup>
-        <Reference Include="Assembly-CSharp">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Assembly-CSharp.dll</HintPath>
+        <Reference Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Assembly-CSharp-Publicized.dll</HintPath>
         </Reference>
-        <Reference Include="Assembly-CSharp-firstpass">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
+        <Reference Include="CommandSystem.Core, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\CommandSystem.Core.dll</HintPath>
         </Reference>
-        <Reference Include="CommandSystem.Core">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\CommandSystem.Core.dll</HintPath>
+        <Reference Include="Exiled.API, Version=9.8.1.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Exiled.API.dll</HintPath>
+        </Reference>
+        <Reference Include="Exiled.CreditTags, Version=9.8.1.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Exiled.CreditTags.dll</HintPath>
+        </Reference>
+        <Reference Include="Exiled.CustomItems, Version=9.8.1.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Exiled.CustomItems.dll</HintPath>
+        </Reference>
+        <Reference Include="Exiled.CustomRoles, Version=9.8.1.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Exiled.CustomRoles.dll</HintPath>
+        </Reference>
+        <Reference Include="Exiled.Events, Version=9.8.1.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Exiled.Events.dll</HintPath>
+        </Reference>
+        <Reference Include="Exiled.Loader, Version=9.8.1.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Exiled.Loader.dll</HintPath>
+        </Reference>
+        <Reference Include="Exiled.Permissions, Version=9.8.1.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\Exiled.Permissions.dll</HintPath>
         </Reference>
         <Reference Include="LabApi, Version=1.1.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\Northwood.LabAPI.1.1.1\lib\net48\LabApi.dll</HintPath>
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\LabApi.dll</HintPath>
         </Reference>
         <Reference Include="Mirror">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Mirror.dll</HintPath>
         </Reference>
-        <Reference Include="netstandard">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\netstandard.dll</HintPath>
+        <Reference Include="NorthwoodLib, Version=1.4.0.0, Culture=neutral, processorArchitecture=MSIL">
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\NorthwoodLib.dll</HintPath>
         </Reference>
         <Reference Include="Pooling">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Pooling.dll</HintPath>
@@ -67,8 +83,11 @@
         <Reference Include="UnityEngine.CoreModule">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
         </Reference>
+        <Reference Include="UnityEngine.PhysicsModule">
+          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.PhysicsModule.dll</HintPath>
+        </Reference>
         <Reference Include="YamlDotNet, Version=11.0.0.0, Culture=neutral, PublicKeyToken=ec19458f3c15af5e, processorArchitecture=MSIL">
-          <HintPath>..\packages\YamlDotNet.11.0.1\lib\net45\YamlDotNet.dll</HintPath>
+          <HintPath>..\packages\ExMod.Exiled.9.8.1\lib\net48\YamlDotNet.dll</HintPath>
         </Reference>
     </ItemGroup>
     <ItemGroup>
@@ -77,10 +96,10 @@
         <Compile Include="Plugin.cs" />
         <Compile Include="Properties\AssemblyInfo.cs"/>
         <Compile Include="SpeechTracker.cs" />
-        <Compile Include="SSTalkySettings.cs" />
         <Compile Include="VoiceChattingHandler.cs" />
     </ItemGroup>
     <ItemGroup>
+      <None Include="App.config" />
       <None Include="packages.config" />
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>

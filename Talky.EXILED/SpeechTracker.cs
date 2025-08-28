@@ -1,18 +1,15 @@
 ﻿using System;
-using GameCore;
-using LabApi.Features.Wrappers;
-using PlayerRoles;
+using Exiled.API.Features;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.PlayableScps.Scp3114;
 using UnityEngine;
 using VoiceChat.Networking;
-using Logger = LabApi.Features.Console.Logger;
 
-namespace Talky.LabAPI
-{
-    public class SpeechTracker : MonoBehaviour
+namespace Talky.EXILED;
+
+public class SpeechTracker : MonoBehaviour
     {
         public Player player;
         public ReferenceHub hub => player.ReferenceHub;
@@ -99,10 +96,10 @@ namespace Talky.LabAPI
                 //Player is attempting to speak, need to check how loud they currently are to determine how their mouth should behave
                 float volume = CalculateVolume();
                 int level = 0;
-                if (volume < Talky.LabAPI.Plugin.Instance.Config.LowVolumeThreshold)
+                if (volume < Talky.EXILED.Plugin.Instance.Config.LowVolumeThreshold)
                 {
                     level = 0;
-                } else if (volume < Talky.LabAPI.Plugin.Instance.Config.HighVolumeThreshold)
+                } else if (volume < Talky.EXILED.Plugin.Instance.Config.HighVolumeThreshold)
                 {
                     level = 1;
                 }
@@ -172,4 +169,3 @@ namespace Talky.LabAPI
             return Mathf.Sqrt(sumOfSquares / buffer.Buffer.Length);
         }
     }
-}

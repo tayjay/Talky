@@ -2,6 +2,8 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talky.LabAPI", "Talky.LabAPI\Talky.LabAPI.csproj", "{2E2D2E00-82AF-4B6B-820C-4803490F47DE}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talky.EXILED", "Talky.EXILED\Talky.EXILED.csproj", "{A5FCA766-D736-4C97-BBEB-BBBF82930C54}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -12,5 +14,9 @@ Global
 		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A5FCA766-D736-4C97-BBEB-BBBF82930C54}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A5FCA766-D736-4C97-BBEB-BBBF82930C54}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A5FCA766-D736-4C97-BBEB-BBBF82930C54}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A5FCA766-D736-4C97-BBEB-BBBF82930C54}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

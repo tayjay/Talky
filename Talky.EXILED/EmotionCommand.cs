@@ -1,10 +1,10 @@
 ﻿using System;
 using CommandSystem;
-using LabApi.Features.Wrappers;
+using Exiled.API.Features;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using RemoteAdmin;
 
-namespace Talky.LabAPI
+namespace Talky.EXILED
 {
     [CommandHandler(typeof(ClientCommandHandler))]
     public class EmotionCommand : ParentCommand
