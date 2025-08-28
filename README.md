@@ -2,5 +2,5 @@
 
 # Features
 - When players speak, as humans, their face will animate based on how loud they are talking.
-- `.emotion`/`.emote` command
+- `.emotion` command
   - The plugin will reset to the Emotion defined here when not speaking
