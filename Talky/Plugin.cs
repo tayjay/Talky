@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Linq;
 using LabApi.Features;
+using LabApi.Features.Console;
 using LabApi.Loader.Features.Plugins;
 
 
@@ -22,6 +24,13 @@ namespace Talky
         public override void Enable()
 #endif
         {
+#if EXILED
+            if (LabApi.Loader.PluginLoader.EnabledPlugins.Any(plugin => plugin.Name == "Talky.LabAPI"))
+            {
+                Logger.Error("Both Talky.EXILED and Talky.LabAPI were detected. Disabling Talky.EXILED, please remove Talky.LabAPI plugin if you'd like to use this one instead.");
+                return;
+            }
+#endif
             voiceChattingHandler =  new VoiceChattingHandler();
             
             voiceChattingHandler.RegisterEvents();
@@ -42,15 +51,17 @@ namespace Talky
             }
         }
 
-        public override string Name { get; } = "Talky";
+        
         public override string Author { get; } = "TayTay";
         public override Version Version { get; } = new Version(0, 1, 2, 0);
         
 #if EXILED
+            public override string Name { get; } = "Talky.EXILED";
             public override string Prefix => "Talky";
 #else 
-            public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";
-            public override Version RequiredApiVersion { get; } = new Version(LabApiProperties.CompiledVersion);
+        public override string Name { get; } = "Talky.LabAPI";
+        public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";
+        public override Version RequiredApiVersion { get; } = new Version(LabApiProperties.CompiledVersion);
 #endif
         
     }

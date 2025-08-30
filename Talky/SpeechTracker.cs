@@ -22,27 +22,12 @@ namespace Talky
         public PlaybackBuffer buffer;
         private EmotionPresetType _defaultPreset = EmotionPresetType.Neutral;
         
-        private OpusDecoder _opusDecoder;
 
         public OpusDecoder OpusDecoder
         {
             get
             {
-                if (_opusDecoder == null)
-                {
-                    // Use reflection to get the decoder
-                    var decoderProperty = typeof(VoiceModuleBase).GetProperty(
-                        "Decoder",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance
-                    );
-                    if (decoderProperty == null)
-                    {
-                        return null;
-                    }
-                    _opusDecoder = decoderProperty.GetValue(player.VoiceModule) as OpusDecoder;
-                    Debug.Assert(_opusDecoder != null, nameof(_opusDecoder) + " != null");
-                }
-                return _opusDecoder;
+                return player.VoiceModule.Decoder;
             }
         }
         
@@ -60,8 +45,8 @@ namespace Talky
         public int LastLevel { get; private set; }
         public float TopVolume { get; private set; }
         
-        private float lowThreshold = 0.01f;
-        private float highThreshold = 0.1f;
+        public float HighestVolume { get; private set; }    
+
 
         // Use this for initialization
         void Awake () {
@@ -69,6 +54,7 @@ namespace Talky
             LastLevel = -2;
             buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             TopVolume = 0.03f;
+            HighestVolume = 0f;
             if(Enum.TryParse<EmotionPresetType>(Plugin.Instance.Config!.DefaultEmotion, out var preset))
             {
                 DefaultPreset = preset;
@@ -111,31 +97,25 @@ namespace Talky
                 else
                 {
                     //Player is attempting to speak, need to check how loud they currently are to determine how their mouth should behave
-
-                    float volume = 0;
-                    if (Plugin.Instance.Config.CalculationType == "Average")
-                    {
-                        volume = CalculateVolume();
-                    } else if (Plugin.Instance.Config.CalculationType == "Peak")
-                    {
-                        volume = CalculatePeakVolume();
-                    }
-                    else
-                    {
-                        volume = CalculateVolume();
-                    }
+                    
+                    float volume = CalculateRMSVolume();
+                    float dbVolume = 20f * Mathf.Log10(volume);
+                    //Logger.Debug("Volume: " + volume + " dB: " + dbVolume + " for " + player.Nickname);
+                    
+                    
                     
                     int level = 0;
-                    if (volume < Plugin.Instance.Config.LowVolumeThreshold)
+                    if ( dbVolume < Plugin.Instance.Config.LowDbThreshold)
                     {
                         level = 0;
-                    } else if (volume < Plugin.Instance.Config.HighVolumeThreshold)
+                    }
+                    else if (dbVolume >= Plugin.Instance.Config.HighDbThreshold)
                     {
-                        level = 1;
+                        level = 2;
                     }
                     else
                     {
-                        level = 2;
+                        level = 1;
                     }
 
                     if (level != LastLevel)

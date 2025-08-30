@@ -32,7 +32,24 @@ namespace Talky
                     
                     tracker.VoiceMessageReceived(ev.Message.Data, ev.Message.DataLength);
                 }
-            } 
+            }
+
+            // Debug code to make NPCs respond to voice chat
+            /*foreach (Player npc in Player.DummyList)
+            {
+                if (npc.VoiceModule is HumanVoiceModule npchumanVoiceModule)
+                {
+                    if (/*ev.Player.IsSpeaking && #1#npc.RoleBase is IVoiceRole npcRole)
+                    {
+                        if (!npc.ReferenceHub.TryGetComponent(out SpeechTracker npctracker))
+                        {
+                            return;
+                        }
+                    
+                        npctracker.VoiceMessageReceived(ev.Message.Data, ev.Message.DataLength);
+                    }
+                }
+            }*/
         }
 
         public void OnSpawn(PlayerSpawnedEventArgs ev)
