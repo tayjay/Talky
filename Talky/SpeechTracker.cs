@@ -30,15 +30,15 @@ namespace Talky
                 return player.VoiceModule.Decoder;
             }
         }
-        
-        public EmotionPresetType DefaultPreset
-        {
+
+        public EmotionPresetType DefaultPreset => Plugin.Instance.settings.GetEmotionPreset(hub);
+        /*{
             get => _defaultPreset;
             set
             {
                 _defaultPreset = value;
             }
-        }
+        }*/
         
         public long LastPacketTime { get; set; }
         
@@ -55,7 +55,8 @@ namespace Talky
             buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             TopVolume = 0.03f;
             HighestVolume = 0f;
-            if(Enum.TryParse<EmotionPresetType>(Plugin.Instance.Config!.DefaultEmotion, out var preset))
+            hub.ServerSetEmotionPreset(DefaultPreset);
+            /*if(Enum.TryParse<EmotionPresetType>(Plugin.Instance.Config!.DefaultEmotion, out var preset))
             {
                 DefaultPreset = preset;
                 player.ReferenceHub.ServerSetEmotionPreset(DefaultPreset);
@@ -63,7 +64,7 @@ namespace Talky
             else
             {
                 DefaultPreset = EmotionPresetType.Neutral;
-            }
+            }*/
             
         }
 	

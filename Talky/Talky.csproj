@@ -101,6 +101,9 @@
         <Reference Include="UnityEngine">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.dll</HintPath>
         </Reference>
+        <Reference Include="UnityEngine.AnimationModule">
+          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
+        </Reference>
         <Reference Include="UnityEngine.CoreModule">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
         </Reference>
@@ -110,7 +113,7 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Config.cs" />
-        <Compile Include="EmotionCommand.cs" />
+        <Compile Include="OverlayAnimationHandler.cs" />
         <Compile Include="Plugin.cs" />
         <Compile Include="Properties\AssemblyInfo.cs"/>
         <Compile Include="SpeechTracker.cs" />

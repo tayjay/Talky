@@ -14,8 +14,9 @@ namespace Talky
 #endif
     
     {
-        public static VoiceChattingHandler voiceChattingHandler;
-        //public static SSTalkySettings settings;
+        public VoiceChattingHandler voiceChattingHandler;
+        //public static OverlayAnimationHandler overlayAnimationHandler;
+        public SSTalkySettings settings;
         public static Plugin Instance { get; private set; }
         
 #if EXILED
@@ -31,9 +32,13 @@ namespace Talky
                 return;
             }
 #endif
+            settings = new SSTalkySettings();
+            settings.Activate();
             voiceChattingHandler =  new VoiceChattingHandler();
+            //overlayAnimationHandler = new OverlayAnimationHandler();
             
             voiceChattingHandler.RegisterEvents();
+            //overlayAnimationHandler.RegisterEvents();
             
             Instance = this;
         }
@@ -49,11 +54,18 @@ namespace Talky
                 voiceChattingHandler.UnregisterEvents();
                 voiceChattingHandler = null;
             }
+            /*if (overlayAnimationHandler != null)
+            {
+                overlayAnimationHandler.UnregisterEvents();
+                overlayAnimationHandler = null;
+            }*/
+            settings.Deactivate();
+            Instance = null;
         }
 
         
         public override string Author { get; } = "TayTay";
-        public override Version Version { get; } = new Version(0, 2, 0, 0);
+        public override Version Version { get; } = new Version(0, 2, 1, 0);
         
 #if EXILED
             public override string Name { get; } = "Talky.EXILED";
