@@ -87,7 +87,7 @@ namespace Talky
                 {
                     tracker.DefaultPreset = preset;
                 }*/
-                Logger.Debug($"Set default emotion for {player.DisplayName} to {preset}");
+                //Logger.Debug($"Set default emotion for {player.DisplayName} to {preset}");
                 
             }
         }
