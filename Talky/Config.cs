@@ -21,6 +21,9 @@ namespace Talky
         [Description("Allow players to use the Animate - Grab kebind to make their character reach out. Default is true.")]
         public bool EnableGrabAnimation { get; set; } = true;
         
+        [Description("Talky plugin translations")]
+        public TranslationsConfig Translations { get; set; } = new TranslationsConfig();
+        
 #if EXILED
         public bool IsEnabled { get; set; } = true;
         public bool Debug { get; set; } = false;

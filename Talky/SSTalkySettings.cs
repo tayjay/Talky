@@ -19,13 +19,23 @@ namespace Talky
         private SSDropdownSetting defaultEmotionDropdown;
         public override void Activate()
         {
-            grabKeybind = new SSKeybindSetting(null, "Animate - Grab" , KeyCode.H, allowSpectatorTrigger: false,
-                hint: "Reach out and grab something.");
-            string[] emotions = Enum.GetNames(typeof(EmotionPresetType));
-            defaultEmotionDropdown = new SSDropdownSetting(null, "Default Emotion", emotions, hint: "Default Emotion to display when not talking.");
+            grabKeybind = new SSKeybindSetting(null, Plugin.Instance.Config.Translations.SSGrabLabel , KeyCode.H, allowSpectatorTrigger: false,
+                hint: Plugin.Instance.Config.Translations.SSGrabHint);
+            string[] emotions =
+            [
+                Plugin.Instance.Config.Translations.Neutral,
+                Plugin.Instance.Config.Translations.Happy,
+                Plugin.Instance.Config.Translations.AwkwardSmile,
+                Plugin.Instance.Config.Translations.Scared,
+                Plugin.Instance.Config.Translations.Angry,
+                Plugin.Instance.Config.Translations.Chad,
+                Plugin.Instance.Config.Translations.Ogre
+            ];
+            
+            defaultEmotionDropdown = new SSDropdownSetting(null, Plugin.Instance.Config.Translations.SSDefaultEmotionLabel, emotions, hint: Plugin.Instance.Config.Translations.SSDefaultEmotionHint);
             var settings = new ServerSpecificSettingBase[3]
             {
-                (ServerSpecificSettingBase)new SSGroupHeader("Talky Settings"),
+                (ServerSpecificSettingBase)new SSGroupHeader(Plugin.Instance.Config.Translations.SSGroupLabel),
                 (ServerSpecificSettingBase)defaultEmotionDropdown,
                 (ServerSpecificSettingBase)grabKeybind
             };
@@ -42,19 +52,12 @@ namespace Talky
         {
             ServerSpecificSettingsSync.ServerOnSettingValueReceived -= new Action<ReferenceHub, ServerSpecificSettingBase>(this.ProcessUserInput);
         }
-        
-        public bool IsTalkyActive(ReferenceHub hub)
-        {
-            return ServerSpecificSettingsSync.GetSettingOfUser<SSTwoButtonsSetting>(hub, 0).SyncIsA;
-        }
 
         public EmotionPresetType GetEmotionPreset(ReferenceHub hub)
         {
             EmotionPresetType type; 
-            string setting = ServerSpecificSettingsSync.GetSettingOfUser<SSDropdownSetting>(hub, defaultEmotionDropdown.SettingId).SyncSelectionText;
-            if (string.IsNullOrEmpty(setting))
-                return EmotionPresetType.Neutral;
-            Enum.TryParse<EmotionPresetType>(setting, out type);
+            int setting = ServerSpecificSettingsSync.GetSettingOfUser<SSDropdownSetting>(hub, defaultEmotionDropdown.SettingId).SyncSelectionIndexRaw;
+            type = (EmotionPresetType)setting;
             return type;
         }
         

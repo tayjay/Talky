@@ -118,6 +118,7 @@
         <Compile Include="Properties\AssemblyInfo.cs"/>
         <Compile Include="SpeechTracker.cs" />
         <Compile Include="SSTalkySettings.cs" />
+        <Compile Include="TranslationsConfig.cs" />
         <Compile Include="VoiceChattingHandler.cs" />
     </ItemGroup>
     <ItemGroup>

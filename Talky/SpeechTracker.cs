@@ -142,32 +142,6 @@ namespace Talky
                 //Logger.Error(e);
             }
         }
-
-
-
-        public float CalculateVolume()
-        {
-            float absTotal = 0;
-            foreach(float sample in buffer.Buffer)
-            {
-                absTotal += Mathf.Abs(sample);
-            }
-            return absTotal / buffer.Buffer.Length;
-        }
-        
-        public float CalculatePeakVolume()
-        {
-            float peak = 0f;
-            foreach(float sample in buffer.Buffer)
-            {
-                float absSample = Mathf.Abs(sample);
-                if (absSample > peak)
-                {
-                    peak = absSample;
-                }
-            }
-            return peak;
-        }
         
         public float CalculateRMSVolume()
         {

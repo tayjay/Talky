@@ -32,6 +32,7 @@ namespace Talky
                 return;
             }
 #endif
+            Instance = this;
             settings = new SSTalkySettings();
             settings.Activate();
             voiceChattingHandler =  new VoiceChattingHandler();
@@ -40,7 +41,7 @@ namespace Talky
             voiceChattingHandler.RegisterEvents();
             //overlayAnimationHandler.RegisterEvents();
             
-            Instance = this;
+            
         }
 
 #if EXILED
@@ -65,7 +66,7 @@ namespace Talky
 
         
         public override string Author { get; } = "TayTay";
-        public override Version Version { get; } = new Version(0, 2, 1, 1);
+        public override Version Version { get; } = new Version(0, 2, 2, 0);
         
 #if EXILED
             public override string Name { get; } = "Talky.EXILED";
