@@ -12,4 +12,5 @@
 - When players speak, as humans, their face will animate based on how loud they are talking.
 - Server-Specific setting for `Default Emotion` to be displayed when not speaking.
 - Keybind for triggering a "Pickup Animation" visible to other players.
+- Config includes Translation options to customize the plugin for your players.
 <img width="1368" height="191" alt="image" src="https://github.com/user-attachments/assets/c26bb24d-72cd-4db3-95b2-31d89aeef815" />
