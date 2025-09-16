@@ -11,6 +11,7 @@ using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.PlayableScps.Scp3114;
 using PlayerRoles.Voice;
+using PlayerStatsSystem;
 using VoiceChat;
 using VoiceChat.Codec;
 
@@ -52,6 +53,24 @@ namespace Talky
             }*/
         }
 
+        public void OnHurt(PlayerHurtEventArgs ev)
+        {
+            if(!Plugin.Instance.Config.EnableReactionOnHurt) return;
+            if (!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
+            {
+                return;
+            }
+
+            int damage = 1000;
+            if (ev.DamageHandler is StandardDamageHandler standardDamageHandler)
+            {
+                damage = (int)Math.Floor(standardDamageHandler.DealtHealthDamage);
+            }
+            if(damage <=Plugin.Instance.Config.MiniumDamageForReaction ) return;
+
+            tracker.OverrideEmotion(EmotionPresetType.Angry, Math.Min(1000, damage*100));
+        }
+
         public void OnSpawn(PlayerSpawnedEventArgs ev)
         {
             if(!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
@@ -63,6 +82,7 @@ namespace Talky
             // Register the event handler for voice messages
             LabApi.Events.Handlers.PlayerEvents.SendingVoiceMessage += OnNewVoiceSending;
             LabApi.Events.Handlers.PlayerEvents.Spawned += OnSpawn;
+            LabApi.Events.Handlers.PlayerEvents.Hurt += OnHurt;
         }
         
         public void UnregisterEvents()
@@ -70,6 +90,7 @@ namespace Talky
             // Unregister the event handler for voice messages
             LabApi.Events.Handlers.PlayerEvents.SendingVoiceMessage -= OnNewVoiceSending;
             LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
+            LabApi.Events.Handlers.PlayerEvents.Hurt -= OnHurt;
         }
     }
 }

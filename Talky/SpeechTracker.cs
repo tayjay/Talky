@@ -22,6 +22,9 @@ namespace Talky
         public PlaybackBuffer buffer;
         private EmotionPresetType _defaultPreset = EmotionPresetType.Neutral;
         
+        private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
+        private long _overrideEndTime = 0;
+        
 
         public OpusDecoder OpusDecoder
         {
@@ -72,6 +75,18 @@ namespace Talky
         void Update () {
             try
             {
+                if (_overrideEndTime > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                {
+                    //Currently in an override state, do nothing
+                    return;
+                } else if (_overrideEndTime != 0)
+                {
+                    //Just finished an override, need to reset to default preset
+                    _overrideEndTime = 0;
+                    //hub.ServerSetEmotionPreset(DefaultPreset);
+                    LastLevel = -2;
+                    //Logger.Info("Set "+ DefaultPreset+" for " + player.Nickname);
+                }
                 EmotionSubcontroller subcontroller;
                 if (!(hub.roleManager.CurrentRole is IFpcRole currentRole) ||
                     !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel
@@ -79,7 +94,6 @@ namespace Talky
                     !characterModelInstance.TryGetSubcontroller<EmotionSubcontroller>(out subcontroller))
                 {
                     // Non-animated character model speaking
-                    
                     return;
                 }
                 
@@ -171,6 +185,13 @@ namespace Talky
             {
                 //Logger.Error(e);
             }
+        }
+        
+        public void OverrideEmotion(EmotionPresetType preset, int durationMs)
+        {
+            _overridePreset = preset;
+            _overrideEndTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + durationMs;
+            hub.ServerSetEmotionPreset(_overridePreset);
         }
     }
 }

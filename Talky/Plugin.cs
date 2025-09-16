@@ -66,7 +66,7 @@ namespace Talky
 
         
         public override string Author { get; } = "TayTay";
-        public override Version Version { get; } = new Version(0, 2, 2, 0);
+        public override Version Version { get; } = new Version(0, 3, 0, 0);
         
 #if EXILED
             public override string Name { get; } = "Talky.EXILED";

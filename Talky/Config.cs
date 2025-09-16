@@ -21,6 +21,11 @@ namespace Talky
         [Description("Allow players to use the Animate - Grab kebind to make their character reach out. Default is true.")]
         public bool EnableGrabAnimation { get; set; } = true;
         
+        [Description("Should the player react with a specific emotion when hurt? Default is true.")]
+        public bool EnableReactionOnHurt { get; set; } = true;
+        [Description("How much damage must be taken in a single hit to trigger a hurt reaction. Default is 5.")]
+        public int MiniumDamageForReaction { get; set; } = 5;
+        
         [Description("Talky plugin translations")]
         public TranslationsConfig Translations { get; set; } = new TranslationsConfig();
         
