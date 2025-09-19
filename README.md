@@ -4,7 +4,7 @@
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/tayjay/Talky/total)
 
 ![Static Badge](https://img.shields.io/badge/LabAPI-1.1.2-blue)
-![Static Badge](https://img.shields.io/badge/EXILED-9.9.1-red)
+![Static Badge](https://img.shields.io/badge/EXILED-9.9.2-red)
 
 
 
