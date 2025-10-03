@@ -14,10 +14,14 @@ using Logger = LabApi.Features.Console.Logger;
 
 namespace Talky
 {
+    /**
+     * Tracks a player's speech and adjusts their mouth animations accordingly.
+     */
     public class SpeechTracker : MonoBehaviour
     {
         public Player player;
         public ReferenceHub hub => player.ReferenceHub;
+        public Player Proxy { get; set; }
         
         public PlaybackBuffer buffer;
         private EmotionPresetType _defaultPreset = EmotionPresetType.Neutral;
@@ -25,7 +29,7 @@ namespace Talky
         private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
         private long _overrideEndTime = 0;
         
-
+        
         public OpusDecoder OpusDecoder
         {
             get
@@ -34,14 +38,7 @@ namespace Talky
             }
         }
 
-        public EmotionPresetType DefaultPreset => Plugin.Instance.settings.GetEmotionPreset(hub);
-        /*{
-            get => _defaultPreset;
-            set
-            {
-                _defaultPreset = value;
-            }
-        }*/
+        public EmotionPresetType DefaultPreset => Plugin.Settings.GetEmotionPreset(hub);
         
         public long LastPacketTime { get; set; }
         
@@ -58,17 +55,8 @@ namespace Talky
             buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             TopVolume = 0.03f;
             HighestVolume = 0f;
+            Proxy = null;
             hub.ServerSetEmotionPreset(DefaultPreset);
-            /*if(Enum.TryParse<EmotionPresetType>(Plugin.Instance.Config!.DefaultEmotion, out var preset))
-            {
-                DefaultPreset = preset;
-                player.ReferenceHub.ServerSetEmotionPreset(DefaultPreset);
-            }
-            else
-            {
-                DefaultPreset = EmotionPresetType.Neutral;
-            }*/
-            
         }
 	
         // Update is called once per frame
@@ -83,9 +71,7 @@ namespace Talky
                 {
                     //Just finished an override, need to reset to default preset
                     _overrideEndTime = 0;
-                    //hub.ServerSetEmotionPreset(DefaultPreset);
                     LastLevel = -2;
-                    //Logger.Info("Set "+ DefaultPreset+" for " + player.Nickname);
                 }
                 EmotionSubcontroller subcontroller;
                 if (!(hub.roleManager.CurrentRole is IFpcRole currentRole) ||
@@ -98,14 +84,13 @@ namespace Talky
                 }
                 
                 //Updated with speech volume
-                if (/*!player.IsSpeaking*/DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-LastPacketTime>Plugin.Instance.Config.EmotionResetTime)
+                if (/*!player.IsSpeaking*/DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-LastPacketTime>Plugin.Config.EmotionResetTime)
                 {
                     //Player has released talk button, should close mouth if they weren't done so already
                     if (LastLevel != -1)
                     {
                         hub.ServerSetEmotionPreset(DefaultPreset);
                         LastLevel = -1;
-                        //Logger.Info("Set "+ DefaultPreset+" for " + player.Nickname);
                     }
                     
                 }
@@ -115,16 +100,13 @@ namespace Talky
                     
                     float volume = CalculateRMSVolume();
                     float dbVolume = 20f * Mathf.Log10(volume);
-                    //Logger.Debug("Volume: " + volume + " dB: " + dbVolume + " for " + player.Nickname);
-                    
-                    
                     
                     int level = 0;
-                    if ( dbVolume < Plugin.Instance.Config.LowDbThreshold)
+                    if ( dbVolume < Plugin.Config.LowDbThreshold)
                     {
                         level = 0;
                     }
-                    else if (dbVolume >= Plugin.Instance.Config.HighDbThreshold)
+                    else if (dbVolume >= Plugin.Config.HighDbThreshold)
                     {
                         level = 2;
                     }
@@ -167,9 +149,20 @@ namespace Talky
             return Mathf.Sqrt(sumOfSquares / buffer.Buffer.Length);
         }
         
-        
+        /**
+         * Called when a voice message is received from the player.
+         */
         public void VoiceMessageReceived(byte[] data, int length)
         {
+            if (Proxy != null)
+            {
+                if (!Proxy.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
+                {
+                    return;
+                }
+                tracker.VoiceMessageReceived(data, length);
+                return;
+            }
             try
             {
                 if (!(player.VoiceModule is HumanVoiceModule humanVoiceModule))
@@ -183,15 +176,19 @@ namespace Talky
                 LastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             } catch (Exception e)
             {
-                //Logger.Error(e);
             }
         }
         
+        /**
+         * Overrides the current emotion preset for a certain duration in milliseconds.
+         * After the duration, the preset will revert to the user's default preset.
+         */
         public void OverrideEmotion(EmotionPresetType preset, int durationMs)
         {
             _overridePreset = preset;
             _overrideEndTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + durationMs;
             hub.ServerSetEmotionPreset(_overridePreset);
         }
+        
     }
 }

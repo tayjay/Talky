@@ -1,13 +1,9 @@
 ﻿using System.ComponentModel;
+using Exiled.API.Interfaces;
 
 namespace Talky
 {
-#if EXILED
     public class Config : Exiled.API.Interfaces.IConfig
-#else
-    public class Config 
-#endif
-    
     {
         [Description("Low dB threshold for voice activation. If the dB level is below this value, the player will show their mouth closed.")]
         public double LowDbThreshold { get; set; } = -80.0;
@@ -26,12 +22,15 @@ namespace Talky
         [Description("How much damage must be taken in a single hit to trigger a hurt reaction. Default is 5.")]
         public int MiniumDamageForReaction { get; set; } = 5;
         
+        [Description("Should the player open their mouth when consuming items (Medkits, SCP207, etc.)? Default is true.")]
+        public bool EnableEmoteOnConsumables { get; set; } = true;
+        
         [Description("Talky plugin translations")]
         public TranslationsConfig Translations { get; set; } = new TranslationsConfig();
-        
-#if EXILED
+        [Description("[EXILED] Enable or disable the plugin. Default is true.")]
         public bool IsEnabled { get; set; } = true;
+        [Description("[EXILED] Enable or disable debug logs. Default is false.")]
         public bool Debug { get; set; } = false;
-#endif
+
     }
 }

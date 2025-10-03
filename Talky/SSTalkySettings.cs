@@ -13,31 +13,31 @@ using Logger = LabApi.Features.Console.Logger;
 
 namespace Talky
 {
-    public class SSTalkySettings : SSTextAreaExample
+    public class SSTalkySettings
     {
         private SSKeybindSetting grabKeybind;
         private SSDropdownSetting defaultEmotionDropdown;
-        public override void Activate()
+        public void Activate()
         {
-            grabKeybind = new SSKeybindSetting(null, Plugin.Instance.Config.Translations.SSGrabLabel , KeyCode.H, allowSpectatorTrigger: false,
-                hint: Plugin.Instance.Config.Translations.SSGrabHint);
+            grabKeybind = new SSKeybindSetting(null, Plugin.Config.Translations.SSGrabLabel , KeyCode.H, allowSpectatorTrigger: false,
+                hint: Plugin.Config.Translations.SSGrabHint);
             string[] emotions =
             [
-                Plugin.Instance.Config.Translations.Neutral,
-                Plugin.Instance.Config.Translations.Happy,
-                Plugin.Instance.Config.Translations.AwkwardSmile,
-                Plugin.Instance.Config.Translations.Scared,
-                Plugin.Instance.Config.Translations.Angry,
-                Plugin.Instance.Config.Translations.Chad,
-                Plugin.Instance.Config.Translations.Ogre
+                Plugin.Config.Translations.Neutral,
+                Plugin.Config.Translations.Happy,
+                Plugin.Config.Translations.AwkwardSmile,
+                Plugin.Config.Translations.Scared,
+                Plugin.Config.Translations.Angry,
+                Plugin.Config.Translations.Chad,
+                Plugin.Config.Translations.Ogre
             ];
             
-            defaultEmotionDropdown = new SSDropdownSetting(null, Plugin.Instance.Config.Translations.SSDefaultEmotionLabel, emotions, hint: Plugin.Instance.Config.Translations.SSDefaultEmotionHint);
+            defaultEmotionDropdown = new SSDropdownSetting(null, Plugin.Config.Translations.SSDefaultEmotionLabel, emotions, hint: Plugin.Config.Translations.SSDefaultEmotionHint);
             var settings = new ServerSpecificSettingBase[3]
             {
-                (ServerSpecificSettingBase)new SSGroupHeader(Plugin.Instance.Config.Translations.SSGroupLabel),
-                (ServerSpecificSettingBase)defaultEmotionDropdown,
-                (ServerSpecificSettingBase)grabKeybind
+                new SSGroupHeader(Plugin.Config.Translations.SSGroupLabel),
+                defaultEmotionDropdown,
+                grabKeybind
             };
             
             if(ServerSpecificSettingsSync.DefinedSettings == null)
@@ -45,12 +45,12 @@ namespace Talky
             else
                 ServerSpecificSettingsSync.DefinedSettings = ServerSpecificSettingsSync.DefinedSettings.Concat(settings).ToArray();
             ServerSpecificSettingsSync.SendToAll();
-            ServerSpecificSettingsSync.ServerOnSettingValueReceived += new Action<ReferenceHub, ServerSpecificSettingBase>(this.ProcessUserInput);
+            ServerSpecificSettingsSync.ServerOnSettingValueReceived += ProcessUserInput;
         }
 
-        public override void Deactivate()
+        public void Deactivate()
         {
-            ServerSpecificSettingsSync.ServerOnSettingValueReceived -= new Action<ReferenceHub, ServerSpecificSettingBase>(this.ProcessUserInput);
+            ServerSpecificSettingsSync.ServerOnSettingValueReceived -= ProcessUserInput;
         }
 
         public EmotionPresetType GetEmotionPreset(ReferenceHub hub)
@@ -63,11 +63,16 @@ namespace Talky
         
         private void ProcessUserInput(ReferenceHub hub, ServerSpecificSettingBase setting)
         {
+            if(hub==null || setting == null) return;
+            // If the keybind for grab is pressed, and only when key is down. Event will trigger on key up as well otherwise.
             if (setting.SettingId == grabKeybind.SettingId && (setting is SSKeybindSetting kb && kb.SyncIsPressed))
             {
-                if(!Plugin.Instance.Config.EnableGrabAnimation) return;
+                if(!Plugin.Config.EnableGrabAnimation) return;
                 var player = Player.Get(hub);
-                //Logger.Debug("Grab key pressed by " + player.DisplayName);
+                if(player.GameObject.TryGetComponent<SpeechTracker>(out var tracker) && tracker.Proxy!=null)
+                {
+                    player = tracker.Proxy;
+                }
                 OverlayAnimationsSubcontroller subcontroller;
                 if (!(player.ReferenceHub.roleManager.CurrentRole is IFpcRole currentRole) ||
                     !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel
@@ -75,10 +80,9 @@ namespace Talky
                     !characterModelInstance.TryGetSubcontroller<OverlayAnimationsSubcontroller>(out subcontroller))
                 {
                     // Non-animated character model speaking
-                    //Logger.Debug("Failed to get OverlayAnimationsSubcontroller from NPC");
                     return;
                 }
-                //subcontroller._overlayAnimations[1].IsPlaying = true;
+                // Hardcoded value, this SearchCompleteAnimation in the array
                 subcontroller._overlayAnimations[1].OnStarted();
                 subcontroller._overlayAnimations[1].SendRpc();
             } else if (setting.SettingId == defaultEmotionDropdown.SettingId)
@@ -86,12 +90,7 @@ namespace Talky
                 var player = Player.Get(hub);
                 EmotionPresetType preset = GetEmotionPreset(hub);
                 player.ReferenceHub.ServerSetEmotionPreset(preset);
-                /*if (player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
-                {
-                    tracker.DefaultPreset = preset;
-                }*/
-                //Logger.Debug($"Set default emotion for {player.DisplayName} to {preset}");
-                
+
             }
         }
     }
