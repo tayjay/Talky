@@ -44,7 +44,7 @@ namespace Talky
          */
         public void OnHurt(PlayerHurtEventArgs ev)
         {
-            if(!Plugin.Config.EnableReactionOnHurt) return;
+            if(!Plugin.Instance.Config.EnableReactionOnHurt) return;
             if (!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
             {
                 return;
@@ -55,7 +55,7 @@ namespace Talky
             {
                 damage = (int)Math.Floor(standardDamageHandler.DealtHealthDamage);
             }
-            if(damage <=Plugin.Config.MiniumDamageForReaction ) return;
+            if(damage <=Plugin.Instance.Config.MiniumDamageForReaction ) return;
 
             tracker.OverrideEmotion(EmotionPresetType.Angry, Math.Min(1000, damage*100));
         }
@@ -76,7 +76,7 @@ namespace Talky
          */
         public void OnUsingItem(PlayerUsingItemEventArgs ev)
         {
-            if(!Plugin.Config.EnableEmoteOnConsumables) return;
+            if(!Plugin.Instance.Config.EnableEmoteOnConsumables) return;
             float waitTime = 0;
             int openTime = 0;
             switch (ev.UsableItem.Type)

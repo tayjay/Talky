@@ -1,9 +1,12 @@
 ﻿using System.ComponentModel;
-using Exiled.API.Interfaces;
 
 namespace Talky
 {
+#if EXILED
     public class Config : Exiled.API.Interfaces.IConfig
+#else
+    public class Config 
+#endif
     {
         [Description("Low dB threshold for voice activation. If the dB level is below this value, the player will show their mouth closed.")]
         public double LowDbThreshold { get; set; } = -80.0;

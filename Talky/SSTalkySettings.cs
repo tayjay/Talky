@@ -19,23 +19,23 @@ namespace Talky
         private SSDropdownSetting defaultEmotionDropdown;
         public void Activate()
         {
-            grabKeybind = new SSKeybindSetting(null, Plugin.Config.Translations.SSGrabLabel , KeyCode.H, allowSpectatorTrigger: false,
-                hint: Plugin.Config.Translations.SSGrabHint);
+            grabKeybind = new SSKeybindSetting(null, Plugin.Instance.Config.Translations.SSGrabLabel , KeyCode.H, allowSpectatorTrigger: false,
+                hint: Plugin.Instance.Config.Translations.SSGrabHint);
             string[] emotions =
             [
-                Plugin.Config.Translations.Neutral,
-                Plugin.Config.Translations.Happy,
-                Plugin.Config.Translations.AwkwardSmile,
-                Plugin.Config.Translations.Scared,
-                Plugin.Config.Translations.Angry,
-                Plugin.Config.Translations.Chad,
-                Plugin.Config.Translations.Ogre
+                Plugin.Instance.Config.Translations.Neutral,
+                Plugin.Instance.Config.Translations.Happy,
+                Plugin.Instance.Config.Translations.AwkwardSmile,
+                Plugin.Instance.Config.Translations.Scared,
+                Plugin.Instance.Config.Translations.Angry,
+                Plugin.Instance.Config.Translations.Chad,
+                Plugin.Instance.Config.Translations.Ogre
             ];
             
-            defaultEmotionDropdown = new SSDropdownSetting(null, Plugin.Config.Translations.SSDefaultEmotionLabel, emotions, hint: Plugin.Config.Translations.SSDefaultEmotionHint);
+            defaultEmotionDropdown = new SSDropdownSetting(null, Plugin.Instance.Config.Translations.SSDefaultEmotionLabel, emotions, hint: Plugin.Instance.Config.Translations.SSDefaultEmotionHint);
             var settings = new ServerSpecificSettingBase[3]
             {
-                new SSGroupHeader(Plugin.Config.Translations.SSGroupLabel),
+                new SSGroupHeader(Plugin.Instance.Config.Translations.SSGroupLabel),
                 defaultEmotionDropdown,
                 grabKeybind
             };
@@ -67,7 +67,7 @@ namespace Talky
             // If the keybind for grab is pressed, and only when key is down. Event will trigger on key up as well otherwise.
             if (setting.SettingId == grabKeybind.SettingId && (setting is SSKeybindSetting kb && kb.SyncIsPressed))
             {
-                if(!Plugin.Config.EnableGrabAnimation) return;
+                if(!Plugin.Instance.Config.EnableGrabAnimation) return;
                 var player = Player.Get(hub);
                 if(player.GameObject.TryGetComponent<SpeechTracker>(out var tracker) && tracker.Proxy!=null)
                 {

@@ -1,4 +1,5 @@
 ﻿using System;
+using AdminToys;
 using GameCore;
 using LabApi.Features.Wrappers;
 using PlayerRoles;
@@ -11,6 +12,7 @@ using UnityEngine;
 using VoiceChat.Codec;
 using VoiceChat.Networking;
 using Logger = LabApi.Features.Console.Logger;
+using PrimitiveObjectToy = LabApi.Features.Wrappers.PrimitiveObjectToy;
 
 namespace Talky
 {
@@ -38,7 +40,7 @@ namespace Talky
             }
         }
 
-        public EmotionPresetType DefaultPreset => Plugin.Settings.GetEmotionPreset(hub);
+        public EmotionPresetType DefaultPreset => Plugin.Instance.Settings.GetEmotionPreset(hub);
         
         public long LastPacketTime { get; set; }
         
@@ -84,7 +86,7 @@ namespace Talky
                 }
                 
                 //Updated with speech volume
-                if (/*!player.IsSpeaking*/DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-LastPacketTime>Plugin.Config.EmotionResetTime)
+                if (/*!player.IsSpeaking*/DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-LastPacketTime>Plugin.Instance.Config.EmotionResetTime)
                 {
                     //Player has released talk button, should close mouth if they weren't done so already
                     if (LastLevel != -1)
@@ -102,11 +104,11 @@ namespace Talky
                     float dbVolume = 20f * Mathf.Log10(volume);
                     
                     int level = 0;
-                    if ( dbVolume < Plugin.Config.LowDbThreshold)
+                    if ( dbVolume < Plugin.Instance.Config.LowDbThreshold)
                     {
                         level = 0;
                     }
-                    else if (dbVolume >= Plugin.Config.HighDbThreshold)
+                    else if (dbVolume >= Plugin.Instance.Config.HighDbThreshold)
                     {
                         level = 2;
                     }
@@ -132,7 +134,12 @@ namespace Talky
                         }
                     }
                 }
-            
+                
+                PrimitiveObjectToy toy = PrimitiveObjectToy.Create(networkSpawn:false);
+                toy.Flags &= ~PrimitiveFlags.Collidable;
+                toy.Spawn();
+                
+
             } catch (Exception e)
             {
                 //Logger.Error(e);
