@@ -30,10 +30,12 @@ namespace Talky
         
         [Description("Talky plugin translations")]
         public TranslationsConfig Translations { get; set; } = new TranslationsConfig();
-        [Description("[EXILED] Enable or disable the plugin. Default is true.")]
+#if EXILED
+        [Description("Enable or disable the plugin. Default is true.")]
         public bool IsEnabled { get; set; } = true;
-        [Description("[EXILED] Enable or disable debug logs. Default is false.")]
+        [Description("Enable or disable debug logs. Default is false.")]
         public bool Debug { get; set; } = false;
+#endif
 
     }
 }

@@ -22,6 +22,7 @@ namespace Talky
     public class SpeechTracker : MonoBehaviour
     {
         public Player player;
+
         public ReferenceHub hub => player.ReferenceHub;
         public Player Proxy { get; set; }
         
@@ -134,11 +135,6 @@ namespace Talky
                         }
                     }
                 }
-                
-                PrimitiveObjectToy toy = PrimitiveObjectToy.Create(networkSpawn:false);
-                toy.Flags &= ~PrimitiveFlags.Collidable;
-                toy.Spawn();
-                
 
             } catch (Exception e)
             {

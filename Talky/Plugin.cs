@@ -2,6 +2,7 @@
 using System.Linq;
 using LabApi.Features;
 using LabApi.Features.Console;
+using LabApi.Features.Wrappers;
 using LabApi.Loader.Features.Plugins;
 
 
@@ -40,8 +41,7 @@ namespace Talky
             
             VoiceChattingHandler.RegisterEvents();
             //overlayAnimationHandler.RegisterEvents();
-            
-            
+
         }
 
 #if EXILED
@@ -66,7 +66,7 @@ namespace Talky
 
         
         public override string Author { get; } = "TayTay";
-        public override Version Version { get; } = new Version(0, 4, 1, 0);
+        public override Version Version { get; } = new Version(0, 4, 2, 0);
         
 #if EXILED
             public override string Name { get; } = "Talky.EXILED";
@@ -77,6 +77,8 @@ namespace Talky
         public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";
         public override Version RequiredApiVersion { get; } = new Version(LabApiProperties.CompiledVersion);
 #endif
+        
+        public string githubRepo = "tayjay/Talky";
         
     }
 }
