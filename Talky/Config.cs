@@ -33,9 +33,10 @@ namespace Talky
 #if EXILED
         [Description("Enable or disable the plugin. Default is true.")]
         public bool IsEnabled { get; set; } = true;
+        
+#endif
         [Description("Enable or disable debug logs. Default is false.")]
         public bool Debug { get; set; } = false;
-#endif
 
     }
 }

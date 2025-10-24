@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Reflection;
 using LabApi.Features;
 using LabApi.Features.Console;
 using LabApi.Features.Wrappers;
@@ -29,7 +30,7 @@ namespace Talky
 #if EXILED
             if (LabApi.Loader.PluginLoader.EnabledPlugins.Any(plugin => plugin.Name == "Talky.LabAPI"))
             {
-                Logger.Error("Both Talky.EXILED and Talky.LabAPI were detected. Disabling Talky.EXILED, please remove Talky.LabAPI plugin if you'd like to use this one instead.");
+                Exiled.API.Features.Log.Error("Both Talky.EXILED and Talky.LabAPI were detected. Disabling Talky.EXILED, please remove Talky.LabAPI plugin if you'd like to use this one instead.");
                 return;
             }
 #endif
@@ -37,12 +38,15 @@ namespace Talky
             Settings = new SSTalkySettings();
             Settings.Activate();
             VoiceChattingHandler =  new VoiceChattingHandler();
-            //overlayAnimationHandler = new OverlayAnimationHandler();
             
             VoiceChattingHandler.RegisterEvents();
-            //overlayAnimationHandler.RegisterEvents();
-
+            
+#if EXILED
+            base.OnEnabled();
+#endif
         }
+
+        
 
 #if EXILED
         public override void OnDisabled()
@@ -55,21 +59,20 @@ namespace Talky
                 VoiceChattingHandler.UnregisterEvents();
                 VoiceChattingHandler = null;
             }
-            /*if (overlayAnimationHandler != null)
-            {
-                overlayAnimationHandler.UnregisterEvents();
-                overlayAnimationHandler = null;
-            }*/
+            
             Settings.Deactivate();
             Instance = null;
+#if EXILED
+            base.OnDisabled();
+#endif
         }
 
         
         public override string Author { get; } = "TayTay";
-        public override Version Version { get; } = new Version(0, 4, 2, 0);
+        public override Version Version { get; } = typeof(Plugin).Assembly.GetName().Version;
         
 #if EXILED
-            public override string Name { get; } = "Talky.EXILED";
+        public override string Name { get; } = "Talky.EXILED";
             public override string Prefix => "Talky";
             public override Version RequiredExiledVersion { get; } = new Version(9, 9, 2);
 #else 

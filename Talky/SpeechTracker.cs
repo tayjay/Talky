@@ -46,9 +46,7 @@ namespace Talky
         public long LastPacketTime { get; set; }
         
         public int LastLevel { get; private set; }
-        public float TopVolume { get; private set; }
-        
-        public float HighestVolume { get; private set; }    
+
 
 
         // Use this for initialization
@@ -56,8 +54,6 @@ namespace Talky
             player = Player.Get(GetComponent<ReferenceHub>());
             LastLevel = -2;
             buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
-            TopVolume = 0.03f;
-            HighestVolume = 0f;
             Proxy = null;
             hub.ServerSetEmotionPreset(DefaultPreset);
         }
@@ -66,6 +62,22 @@ namespace Talky
         void Update () {
             try
             {
+                EmotionSubcontroller subcontroller;
+                if (!(hub.roleManager.CurrentRole is IFpcRole currentRole) ||
+                    !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel
+                        characterModelInstance) ||
+                    !characterModelInstance.TryGetSubcontroller<EmotionSubcontroller>(out subcontroller))
+                {
+                    // Non-animated character model speaking, can delete self.
+#if EXILED
+                    Exiled.API.Features.Log.Debug("Removing SpeechTracker from non-animated model player " + player.Nickname);
+#else
+                    Logger.Debug("Removing SpeechTracker from non-animated model player " + player.Nickname, Plugin.Instance.Config.Debug);
+#endif
+                    Destroy(this);
+                    return;
+                }
+                
                 if (_overrideEndTime > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                 {
                     //Currently in an override state, do nothing
@@ -75,15 +87,6 @@ namespace Talky
                     //Just finished an override, need to reset to default preset
                     _overrideEndTime = 0;
                     LastLevel = -2;
-                }
-                EmotionSubcontroller subcontroller;
-                if (!(hub.roleManager.CurrentRole is IFpcRole currentRole) ||
-                    !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel
-                        characterModelInstance) ||
-                    !characterModelInstance.TryGetSubcontroller<EmotionSubcontroller>(out subcontroller))
-                {
-                    // Non-animated character model speaking
-                    return;
                 }
                 
                 //Updated with speech volume
@@ -179,6 +182,11 @@ namespace Talky
                 LastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             } catch (Exception e)
             {
+#if EXILED
+                Exiled.API.Features.Log.Debug("Error decoding voice message: " + e);
+#else
+                Logger.Debug("Error decoding voice message: " + e, Plugin.Instance.Config.Debug);
+#endif
             }
         }
         
@@ -191,6 +199,11 @@ namespace Talky
             _overridePreset = preset;
             _overrideEndTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + durationMs;
             hub.ServerSetEmotionPreset(_overridePreset);
+#if EXILED
+            Exiled.API.Features.Log.Debug("Overriding emotion preset to " + preset + " for " + durationMs + "ms");
+#else
+            Logger.Debug("Overriding emotion preset to " + preset + " for " + durationMs + "ms", Plugin.Instance.Config.Debug);
+#endif
         }
         
     }
