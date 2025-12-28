@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Linq;
-using System.Reflection;
 using LabApi.Features;
-using LabApi.Features.Console;
-using LabApi.Features.Wrappers;
 using LabApi.Loader.Features.Plugins;
 
 
@@ -17,6 +14,7 @@ namespace Talky
     
     {
         public VoiceChattingHandler VoiceChattingHandler;
+        public HeadBobHandler HeadBobHandler;
         //public static OverlayAnimationHandler overlayAnimationHandler;
         public SSTalkySettings Settings;
         public static Plugin Instance { get; private set; }
@@ -38,8 +36,10 @@ namespace Talky
             Settings = new SSTalkySettings();
             Settings.Activate();
             VoiceChattingHandler =  new VoiceChattingHandler();
+            HeadBobHandler = new HeadBobHandler();
             
             VoiceChattingHandler.RegisterEvents();
+            HeadBobHandler.RegisterEvents();
             
 #if EXILED
             base.OnEnabled();
@@ -59,7 +59,11 @@ namespace Talky
                 VoiceChattingHandler.UnregisterEvents();
                 VoiceChattingHandler = null;
             }
-            
+            if (HeadBobHandler != null)
+            {
+                HeadBobHandler.UnregisterEvents();
+                HeadBobHandler = null;
+            }
             Settings.Deactivate();
             Instance = null;
 #if EXILED
@@ -74,7 +78,7 @@ namespace Talky
 #if EXILED
         public override string Name { get; } = "Talky.EXILED";
             public override string Prefix => "Talky";
-            public override Version RequiredExiledVersion { get; } = new Version(9, 9, 2);
+            public override Version RequiredExiledVersion { get; } = new Version(9, 12, 1);
 #else 
         public override string Name { get; } = "Talky.LabAPI";
         public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";

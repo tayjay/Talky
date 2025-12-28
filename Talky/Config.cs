@@ -28,6 +28,12 @@ namespace Talky
         [Description("Should the player open their mouth when consuming items (Medkits, SCP207, etc.)? Default is true.")]
         public bool EnableEmoteOnConsumables { get; set; } = true;
         
+        [Description("Enable or disable head bobbing while talking. Default is true.")]
+        public bool EnableHeadBob { get; set; } = true;
+        [Description("How much should the player bob their head while talking. Default is 10.")]
+
+        public int HeadBobAmount { get; set; } = 10;
+        
         [Description("Talky plugin translations")]
         public TranslationsConfig Translations { get; set; } = new TranslationsConfig();
 #if EXILED

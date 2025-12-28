@@ -1,6 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Linq;
 using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.Thirdperson;
@@ -8,8 +6,6 @@ using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers.OverlayAnims;
 using UnityEngine;
 using UserSettings.ServerSpecific;
-using UserSettings.ServerSpecific.Examples;
-using Logger = LabApi.Features.Console.Logger;
 
 namespace Talky
 {
@@ -89,7 +85,8 @@ namespace Talky
             {
                 var player = Player.Get(hub);
                 EmotionPresetType preset = GetEmotionPreset(hub);
-                player.ReferenceHub.ServerSetEmotionPreset(preset);
+                //player.ReferenceHub.ServerSetEmotionPreset(preset);
+                player.Emotion = preset;
 
             }
         }

@@ -7,7 +7,10 @@ using LabApi.Features.Console;
 using LabApi.Features.Enums;
 using LabApi.Features.Wrappers;
 using MEC;
+using Mirror;
+using PlayerRoles;
 using PlayerRoles.FirstPersonControl;
+using PlayerRoles.FirstPersonControl.NetworkMessages;
 using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.PlayableScps.Scp3114;
@@ -67,8 +70,10 @@ namespace Talky
          */
         public void OnSpawn(PlayerSpawnedEventArgs ev)
         {
-            if(!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
+            if (!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
                 ev.Player.ReferenceHub.gameObject.AddComponent<SpeechTracker>();
+            else
+                tracker.OverrideEmotion(tracker.DefaultPreset,100);
         }
 
         /**
@@ -125,6 +130,8 @@ namespace Talky
             });
             
         }
+
+        
         
         public void RegisterEvents()
         {
