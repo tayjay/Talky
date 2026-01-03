@@ -32,7 +32,32 @@ namespace Talky
         public bool EnableHeadBob { get; set; } = true;
         [Description("How much should the player bob their head while talking. Default is 10.")]
 
-        public int HeadBobAmount { get; set; } = 10;
+        public float HeadBobAmount { get; set; } = 10;
+        
+        [Description("Enable or disable glancing towards the direction of the voice source while talking. Default is true.")]
+        public bool EnableGlancing { get; set; } = true;
+
+        [Description("The maximum range at which glancing will occur. Default is 7 meters.")]
+        public float GlaceRange { get; set; } = 7f;
+        
+        [Description("The field of view angle within which glancing will occur. Default is 140 degrees.")]
+        public float GlaceFov { get; set; } = 140f;
+        
+        [Description("The speed at which the player glances towards the voice source. Default is 1.65.")]
+        public float GlaceGain { get; set; } = 1.5f;
+        
+        [Description("The maximum yaw angle for glancing. Default is 40 degrees.")]
+        public float GlanceMaxYaw { get; set; } = 40f;
+        
+        [Description("The maximum pitch angle for glancing. Default is 35 degrees.")]
+        public float GlanceMaxPitch { get; set; } = 35f;
+        
+        [Description("The maximum duration (in milliseconds) to look at voice source after they stop talking. Default is 1000ms.")]
+        public long GlanceMaxDuration { get; set; } = 1000;
+        
+        [Description("Should dynamic traits be used for glancing? Makes players move at different speeds to add variety. Default is true.")]
+        public bool GlanceDynamicTraits { get; set; } = true;
+        
         
         [Description("Talky plugin translations")]
         public TranslationsConfig Translations { get; set; } = new TranslationsConfig();

@@ -1,4 +1,5 @@
-﻿using System.Linq;
+﻿using System;
+using System.Linq;
 using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.Thirdperson;
@@ -81,6 +82,11 @@ namespace Talky
                 // Hardcoded value, this SearchCompleteAnimation in the array
                 subcontroller._overlayAnimations[1].OnStarted();
                 subcontroller._overlayAnimations[1].SendRpc();
+                
+                if(player.GameObject.TryGetComponent<LookOverride>(out var lookOverride))
+                {
+                    lookOverride.LastBusyTime = DateTime.Now + TimeSpan.FromSeconds(2f);
+                }
             } else if (setting.SettingId == defaultEmotionDropdown.SettingId)
             {
                 var player = Player.Get(hub);

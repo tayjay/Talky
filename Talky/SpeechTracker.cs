@@ -1,5 +1,6 @@
 ﻿using System;
 using LabApi.Features.Wrappers;
+using PlayerRoles;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
@@ -32,7 +33,7 @@ namespace Talky
         
         public long LastPacketTime { get; set; }
         
-        public int LastLevel { get; private set; }
+        public SpeechLevel LastLevel { get; private set; }
         
         public float CurrentVolumeRatio { get; set; }
         
@@ -44,7 +45,7 @@ namespace Talky
                 {
                  return false;
                 }
-                if (player.IsHuman)
+                if (player.IsHuman || player.Role==RoleTypeId.Scp3114)
                 {
                     return true;
                 }
@@ -56,7 +57,7 @@ namespace Talky
         // Use this for initialization
         void Awake () {
             player = Player.Get(GetComponent<ReferenceHub>());
-            LastLevel = -2;
+            LastLevel = SpeechLevel.Init;
             _buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             Proxy = null;
             //hub.ServerSetEmotionPreset(DefaultPreset);
@@ -99,25 +100,25 @@ namespace Talky
                 {
                     //Just finished an override, need to reset to default preset
                     _overrideEndTime = 0;
-                    LastLevel = -2;
+                    LastLevel = SpeechLevel.Init;
                 }
 
                 // Fix default preset not applying on spawn.
-                if (LastLevel == -2)
+                if (LastLevel == SpeechLevel.Init)
                 {
                     player.Emotion = DefaultPreset;
-                    LastLevel = -1;
+                    LastLevel = SpeechLevel.Reset;
                 }
                 
                 //Updated with speech volume
                 if (/*!player.IsSpeaking*/DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-LastPacketTime>Plugin.Instance.Config.EmotionResetTime)
                 {
                     //Player has released talk button, should close mouth if they weren't done so already
-                    if (LastLevel != -1)
+                    if (LastLevel != SpeechLevel.Reset)
                     {
                         //hub.ServerSetEmotionPreset(DefaultPreset);
                         player.Emotion = DefaultPreset;
-                        LastLevel = -1;
+                        LastLevel = SpeechLevel.Reset;
                         CurrentVolumeRatio = 0;
                     }
                     
@@ -129,20 +130,20 @@ namespace Talky
                     float volume = CalculateRMSVolume();
                     float dbVolume = 20f * Mathf.Log10(volume);
                     
-                    int level = 0;
+                    SpeechLevel level = SpeechLevel.Silent;
                     if ( dbVolume < Plugin.Instance.Config.LowDbThreshold)
                     {
-                        level = 0;
+                        level = SpeechLevel.Silent;
                         CurrentVolumeRatio = 0;
                     }
                     else if (dbVolume >= Plugin.Instance.Config.HighDbThreshold)
                     {
-                        level = 2;
+                        level = SpeechLevel.Loud;
                         CurrentVolumeRatio = 1f;
                     }
                     else
                     {
-                        level = 1;
+                        level = SpeechLevel.Quiet;
                         CurrentVolumeRatio = (float)((dbVolume - Plugin.Instance.Config.LowDbThreshold) / (Plugin.Instance.Config.HighDbThreshold - Plugin.Instance.Config.LowDbThreshold));
                     }
 
@@ -151,13 +152,13 @@ namespace Talky
                         LastLevel = level;
                         switch (level)
                         {
-                            case 0:
+                            case SpeechLevel.Silent:
                                 player.Emotion = EmotionPresetType.Neutral;
                                 break;
-                            case 1:
+                            case SpeechLevel.Quiet:
                                 player.Emotion = EmotionPresetType.Happy;
                                 break;
-                            case 2:
+                            case SpeechLevel.Loud:
                                 player.Emotion = EmotionPresetType.Scared;
                                 break;
                         }
@@ -236,7 +237,14 @@ namespace Talky
         }
         
         
-        
+        public enum SpeechLevel
+        {
+            Init = -2,
+            Reset = -1,
+            Silent = 0,
+            Quiet = 1,
+            Loud = 2
+        }
         
     }
 }

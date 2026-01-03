@@ -1,7 +1,12 @@
 ﻿using System;
+using System.IO;
 using System.Linq;
 using LabApi.Features;
+using LabApi.Features.Console;
+using LabApi.Loader;
+using LabApi.Loader.Features.Paths;
 using LabApi.Loader.Features.Plugins;
+using MEC;
 
 
 namespace Talky
@@ -11,10 +16,9 @@ namespace Talky
 #else
     public class Plugin : Plugin<Config>
 #endif
-    
     {
         public VoiceChattingHandler VoiceChattingHandler;
-        public HeadBobHandler HeadBobHandler;
+        public FakeLookHandler FakeLookHandler;
         //public static OverlayAnimationHandler overlayAnimationHandler;
         public SSTalkySettings Settings;
         public static Plugin Instance { get; private set; }
@@ -36,10 +40,14 @@ namespace Talky
             Settings = new SSTalkySettings();
             Settings.Activate();
             VoiceChattingHandler =  new VoiceChattingHandler();
-            HeadBobHandler = new HeadBobHandler();
+            FakeLookHandler = new FakeLookHandler();
             
             VoiceChattingHandler.RegisterEvents();
-            HeadBobHandler.RegisterEvents();
+            FakeLookHandler.RegisterEvents();
+
+            FakeLookHandler.IncompatiblePluginDetected = !CheckCompatibility();
+
+            
             
 #if EXILED
             base.OnEnabled();
@@ -59,16 +67,61 @@ namespace Talky
                 VoiceChattingHandler.UnregisterEvents();
                 VoiceChattingHandler = null;
             }
-            if (HeadBobHandler != null)
+            if (FakeLookHandler != null)
             {
-                HeadBobHandler.UnregisterEvents();
-                HeadBobHandler = null;
+                FakeLookHandler.UnregisterEvents();
+                FakeLookHandler = null;
             }
             Settings.Deactivate();
             Instance = null;
 #if EXILED
             base.OnDisabled();
 #endif
+        }
+        
+        public bool CheckCompatibility()
+        {
+#if EXILED
+            foreach(var plugin in Exiled.Loader.Loader.Plugins)
+#else
+            foreach(var plugin in LabApi.Loader.PluginLoader.EnabledPlugins)
+#endif  
+            {
+                if (plugin.Name == "CedMod")
+                {
+                    try
+                    {
+                        // Get the Singleton instance of CedMod
+                        var cedModType = plugin.GetType();
+                        var singletonField = cedModType.GetField("Singleton");
+                        var cedModInstance = singletonField.GetValue(null);
+                        // Get Config property
+                        var configProperty = cedModType.GetProperty("Config");
+                        var config = configProperty.GetValue(cedModInstance);
+                        // Get CedModConfig property
+                        var cedModConfigType = config.GetType();
+                        var cedModConfigProperty = cedModConfigType.GetProperty("CedMod");
+                        var cedModConfig = cedModConfigProperty.GetValue(config);
+                        // Get value of DisableFakeSyncing
+                        var disableFakeSyncingProperty = cedModConfig.GetType().GetProperty("DisableFakeSyncing");
+                        var disableFakeSyncingValue = (bool)disableFakeSyncingProperty.GetValue(cedModConfig);
+                        if (!disableFakeSyncingValue)
+                        {
+                            Logger.Error(
+                                "CedMod's \"disable_fake_syncing\" is \"false\", which is incompatible with some Talky features. Please change it to \"true\" in CedMod's config to ensure full functionality.");
+                            return false;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error(
+                            $"An error occurred while checking CedMod's configuration for compatibility: {ex.Message}. Please ensure that CedMod's disable_fake_syncing is disabled to ensure full Talky functionality.");
+                        return false;
+                    }
+                }
+            }
+            Logger.Info($"Plugin compatibility check passed.");
+            return true;
         }
 
         
@@ -78,7 +131,7 @@ namespace Talky
 #if EXILED
         public override string Name { get; } = "Talky.EXILED";
             public override string Prefix => "Talky";
-            public override Version RequiredExiledVersion { get; } = new Version(9, 12, 1);
+            public override Version RequiredExiledVersion { get; } = new Version(9, 12, 2);
 #else 
         public override string Name { get; } = "Talky.LabAPI";
         public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";
