@@ -1,5 +1,6 @@
 ﻿using System;
 using LabApi.Features.Wrappers;
+using MEC;
 using PlayerRoles;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.Thirdperson;
@@ -22,7 +23,13 @@ namespace Talky
         public Player Proxy { get; set; }
         
         private PlaybackBuffer _buffer;
-        
+
+        private float[] _samples;
+
+        // Throttling - 30Hz is sufficient for mouth animations
+        private float _lastUpdateTime;
+        private const float UpdateInterval = 0.033f;
+
         private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
         private long _overrideEndTime = 0;
         
@@ -31,7 +38,7 @@ namespace Talky
 
         public EmotionPresetType DefaultPreset => Plugin.Instance.Settings.GetEmotionPreset(hub);
         
-        public long LastPacketTime { get; set; }
+        public float LastPacketTime { get; set; }
         
         public SpeechLevel LastLevel { get; private set; }
         
@@ -41,7 +48,7 @@ namespace Talky
         {
             get
             {
-                if(!Plugin.Instance.Config.EnableHeadBob)
+                if(!Plugin.Instance.Config.EnableHeadBobbing)
                 {
                  return false;
                 }
@@ -62,36 +69,30 @@ namespace Talky
             Proxy = null;
             //hub.ServerSetEmotionPreset(DefaultPreset);
             player.Emotion = DefaultPreset;
+            _samples  = new float[1024];
         }
 	
         // Update is called once per frame
         void Update () {
             try
             {
-                EmotionSubcontroller subcontroller;
-                if (!(hub.roleManager.CurrentRole is IFpcRole currentRole) ||
-                    !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel
-                        characterModelInstance) ||
-                    !characterModelInstance.TryGetSubcontroller<EmotionSubcontroller>(out subcontroller))
+                if (!player.Role.IsHuman())
                 {
-                    if (!Plugin.Instance.Config.EnableHeadBob)
-                    {
-                        // Non-animated character model speaking, can delete self.
+                    // Non-animated character model speaking, can delete self.
 #if EXILED
-                        Exiled.API.Features.Log.Debug("Removing SpeechTracker from non-animated model player " + player.Nickname);
+                    Exiled.API.Features.Log.Debug("Removing SpeechTracker from non-animated model player " + player.Nickname);
 #else
                     Logger.Debug("Removing SpeechTracker from non-animated model player " + player.Nickname, Plugin.Instance.Config.Debug);
 #endif
-                        Destroy(this);
-                        return;
-                    }
-                    else
-                    {
-                        // RP talking enabled, Handle speech by looking
-                    }
-                    
+                    Destroy(this);
+                    return;
                 }
-                
+
+                // Throttle updates to 30Hz - mouth animations don't need 60+ fps
+                if (Time.time - _lastUpdateTime < UpdateInterval)
+                    return;
+                _lastUpdateTime = Time.time;
+
                 if (_overrideEndTime > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                 {
                     //Currently in an override state, do nothing
@@ -109,9 +110,9 @@ namespace Talky
                     player.Emotion = DefaultPreset;
                     LastLevel = SpeechLevel.Reset;
                 }
-                
+
                 //Updated with speech volume
-                if (/*!player.IsSpeaking*/DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()-LastPacketTime>Plugin.Instance.Config.EmotionResetTime)
+                if ((Time.time - LastPacketTime) * 1000 > Plugin.Instance.Config.EmotionResetTime)
                 {
                     //Player has released talk button, should close mouth if they weren't done so already
                     if (LastLevel != SpeechLevel.Reset)
@@ -190,33 +191,32 @@ namespace Talky
         {
             if (Proxy != null)
             {
-                if (!Proxy.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
+                if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(Proxy.NetworkId, out SpeechTracker tracker))
                 {
                     return;
                 }
                 tracker.VoiceMessageReceived(data, length);
                 return;
             }
-            try
-            {
-                // This is already done when sending the voice data.
-                /*if (!(player.VoiceModule is HumanVoiceModule humanVoiceModule))
+            
+            //Timing.CallDelayed(Timing.WaitForOneFrame, () =>
+            //{ // Was experiencing voice artifacting with this
+                try
                 {
-                    return;
-                }*/
-                
-                float[] samples = new float[1024]; //480
-                int len = OpusDecoder.Decode(data, length, samples);
-                _buffer.Write(samples,len);
-                LastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            } catch (Exception e)
-            {
+                    int len = OpusDecoder.Decode(data, length, _samples);
+                    _buffer.Write(_samples, len);
+                    LastPacketTime = Time.time;
+
+                } catch (Exception e)
+                {
 #if EXILED
                 Exiled.API.Features.Log.Debug("Error decoding voice message: " + e);
 #else
-                Logger.Debug("Error decoding voice message: " + e, Plugin.Instance.Config.Debug);
+                    Logger.Debug("Error decoding voice message: " + e, Plugin.Instance.Config.Debug);
 #endif
-            }
+                }
+            //});
+            
         }
         
         /**

@@ -85,7 +85,7 @@ namespace Talky
                 
                 if(player.GameObject.TryGetComponent<LookOverride>(out var lookOverride))
                 {
-                    lookOverride.LastBusyTime = DateTime.Now + TimeSpan.FromSeconds(2f);
+                    lookOverride.LastBusyTime = Time.time + 2;
                 }
             } else if (setting.SettingId == defaultEmotionDropdown.SettingId)
             {

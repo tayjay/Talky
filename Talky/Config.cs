@@ -29,12 +29,12 @@ namespace Talky
         public bool EnableEmoteOnConsumables { get; set; } = true;
         
         [Description("Enable or disable head bobbing while talking. Default is true.")]
-        public bool EnableHeadBob { get; set; } = true;
+        public bool EnableHeadBobbing { get; set; } = true;
         [Description("How much should the player bob their head while talking. Default is 10.")]
 
         public float HeadBobAmount { get; set; } = 10;
         
-        [Description("Enable or disable glancing towards the direction of the voice source while talking. Default is true.")]
+        [Description("Enable or disable glancing towards the direction of the voice source while talking. Adds more immersion at cost of performance on large servers. Default is true.")]
         public bool EnableGlancing { get; set; } = true;
 
         [Description("The maximum range at which glancing will occur. Default is 7 meters.")]
@@ -55,8 +55,8 @@ namespace Talky
         [Description("The maximum duration (in milliseconds) to look at voice source after they stop talking. Default is 1000ms.")]
         public long GlanceMaxDuration { get; set; } = 1000;
         
-        [Description("Should dynamic traits be used for glancing? Makes players move at different speeds to add variety. Default is true.")]
-        public bool GlanceDynamicTraits { get; set; } = true;
+        //[Description("Should dynamic traits be used for glancing? Makes players move at different speeds to add variety. Default is true.")]
+        //public bool GlanceDynamicTraits { get; set; } = true;
         
         
         [Description("Talky plugin translations")]

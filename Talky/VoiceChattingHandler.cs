@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using GameCore;
 using LabApi.Events.Arguments.PlayerEvents;
@@ -23,6 +24,8 @@ namespace Talky
 {
     public class VoiceChattingHandler
     {
+        
+        public readonly Dictionary<uint, SpeechTracker> SpeechTrackerCache = new Dictionary<uint, SpeechTracker>();
 
         /**
          * When the player talks and sends a voice message to the server.
@@ -33,7 +36,7 @@ namespace Talky
             {
                 if (ev.Player.RoleBase is IVoiceRole role)
                 {
-                    if (!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
+                    if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
                     {
                         return;
                     }
@@ -48,7 +51,7 @@ namespace Talky
         public void OnHurt(PlayerHurtEventArgs ev)
         {
             if(!Plugin.Instance.Config.EnableReactionOnHurt) return;
-            if (!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
+            if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
             {
                 return;
             }
@@ -70,10 +73,13 @@ namespace Talky
          */
         public void OnSpawn(PlayerSpawnedEventArgs ev)
         {
-            if (!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker))
-                ev.Player.ReferenceHub.gameObject.AddComponent<SpeechTracker>();
-            else
-                tracker.OverrideEmotion(tracker.DefaultPreset,100);
+            var hub = ev.Player.ReferenceHub;
+            if (!hub.TryGetComponent(out SpeechTracker tracker))
+            {
+                tracker = hub.gameObject.AddComponent<SpeechTracker>();
+            }
+            SpeechTrackerCache[hub.netId] = tracker;
+            tracker.OverrideEmotion(tracker.DefaultPreset,100);
         }
 
         /**
@@ -112,7 +118,7 @@ namespace Talky
             {
                 if(!ev.IsAllowed) return;
                 if(ev.UsableItem is not { IsUsing: true }) return;
-                if(!ev.Player.ReferenceHub.TryGetComponent(out SpeechTracker tracker)) return;
+                if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null) return;
                 tracker.OverrideEmotion(EmotionPresetType.Scared, openTime);
                 if (ev.UsableItem.Type == ItemType.AntiSCP207)
                 {
@@ -131,6 +137,16 @@ namespace Talky
             
         }
 
+
+        public void OnRoundRestart()
+        {
+            SpeechTrackerCache.Clear();
+        }
+        
+        public void OnPlayerLeft(PlayerLeftEventArgs ev)
+        {
+            SpeechTrackerCache.Remove(ev.Player.ReferenceHub.netId);
+        }
         
         
         public void RegisterEvents()
@@ -140,15 +156,20 @@ namespace Talky
             LabApi.Events.Handlers.PlayerEvents.Spawned += OnSpawn;
             LabApi.Events.Handlers.PlayerEvents.Hurt += OnHurt;
             LabApi.Events.Handlers.PlayerEvents.UsingItem += OnUsingItem;
+            LabApi.Events.Handlers.ServerEvents.RoundRestarted += OnRoundRestart;
+            LabApi.Events.Handlers.PlayerEvents.Left += OnPlayerLeft;
         }
         
         public void UnregisterEvents()
         {
+            SpeechTrackerCache.Clear();
             // Unregister the event handler for voice messages
             LabApi.Events.Handlers.PlayerEvents.SendingVoiceMessage -= OnNewVoiceSending;
             LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
             LabApi.Events.Handlers.PlayerEvents.Hurt -= OnHurt;
             LabApi.Events.Handlers.PlayerEvents.UsingItem -= OnUsingItem;
+            LabApi.Events.Handlers.ServerEvents.RoundRestarted -= OnRoundRestart;
+            LabApi.Events.Handlers.PlayerEvents.Left -= OnPlayerLeft;
         }
     }
 }

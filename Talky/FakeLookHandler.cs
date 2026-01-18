@@ -1,4 +1,4 @@
-﻿using System;
+﻿using System.Collections.Generic;
 using InventorySystem.Items.Firearms.Modules;
 using InventorySystem.Searching;
 using LabApi.Events.Arguments.PlayerEvents;
@@ -14,16 +14,23 @@ namespace Talky;
 
 public class FakeLookHandler
 {
-    
     private FpcSyncData _lastSyncData;
     private int _index = 0;
     public bool IncompatiblePluginDetected = false;
 
+    // Cache LookOverride components to avoid TryGetComponent calls in hot paths
+    public readonly Dictionary<uint, LookOverride> LookOverrideCache = new Dictionary<uint, LookOverride>();
+    
+
     public void OnSpawn(PlayerSpawnedEventArgs ev)
     {
-        if(IncompatiblePluginDetected) return;
-        if (!ev.Player.ReferenceHub.TryGetComponent(out LookOverride tracker))
-            ev.Player.ReferenceHub.gameObject.AddComponent<LookOverride>();
+        if (IncompatiblePluginDetected) return;
+        var hub = ev.Player.ReferenceHub;
+        if (!hub.TryGetComponent(out LookOverride tracker))
+        {
+            tracker = hub.gameObject.AddComponent<LookOverride>();
+        }
+        LookOverrideCache[hub.netId] = tracker;
     }
     
     
@@ -74,7 +81,8 @@ public class FakeLookHandler
             return role;
         }
 
-        if (!target.TryGetComponent(out LookOverride tracker))
+        // Use cached LookOverride instead of TryGetComponent
+        if (!LookOverrideCache.TryGetValue(target.netId, out LookOverride tracker) || tracker == null)
         {
             return role;
         }
@@ -103,61 +111,69 @@ public class FakeLookHandler
     public void OnShoot(PlayerShotWeaponEventArgs ev)
     {
         if (ev.FirearmItem.Base.TryGetModule<IAdsModule>(out IAdsModule module) && module.AdsTarget) return; // Don't reset if aiming down sights
-        
-        if(ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-            lookOverride.LastBusyTime = DateTime.Now + TimeSpan.FromSeconds(1);
+
+        if (LookOverrideCache.TryGetValue(ev.Player.ReferenceHub.netId, out var lookOverride) && lookOverride != null)
+            lookOverride.LastBusyTime = Time.time + 1f;
     }
 
     public void ToggleAds(PlayerAimedWeaponEventArgs ev)
     {
+        if (!LookOverrideCache.TryGetValue(ev.Player.ReferenceHub.netId, out var lookOverride) || lookOverride == null)
+            return;
+
         if (ev.Aiming)
         {
-            if(ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-                lookOverride.LastBusyTime = DateTime.Now+TimeSpan.MaxValue;
+            lookOverride.LastBusyTime = float.MaxValue;
         }
         else
         {
-            if (ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-                lookOverride.LastBusyTime = DateTime.Now;
+            lookOverride.LastBusyTime = Time.time;
         }
-        
     }
 
     public void OnStartUsingItem(PlayerUsingItemEventArgs ev)
     {
-        if(ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-            lookOverride.LastBusyTime = DateTime.Now + TimeSpan.FromSeconds(ev.UsableItem.UseDuration);
+        if (LookOverrideCache.TryGetValue(ev.Player.ReferenceHub.netId, out var lookOverride) && lookOverride != null)
+            lookOverride.LastBusyTime = Time.time + ev.UsableItem.UseDuration;
     }
-    
+
     public void OnFinishUsedItem(PlayerUsedItemEventArgs ev)
     {
-        if(ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-            lookOverride.LastBusyTime = DateTime.Now;
+        if (LookOverrideCache.TryGetValue(ev.Player.ReferenceHub.netId, out var lookOverride) && lookOverride != null)
+            lookOverride.LastBusyTime = Time.time;
     }
 
     public void OnCancelUseItem(PlayerCancelledUsingItemEventArgs ev)
     {
-        if(ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-            lookOverride.LastBusyTime = DateTime.Now;
+        if (LookOverrideCache.TryGetValue(ev.Player.ReferenceHub.netId, out var lookOverride) && lookOverride != null)
+            lookOverride.LastBusyTime = Time.time;
     }
 
     public void OnPickingUp(PlayerSearchingPickupEventArgs ev)
     {
-        if(ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-            lookOverride.LastBusyTime = DateTime.Now + TimeSpan.FromSeconds((ev.Pickup.Base as ISearchable).SearchTimeForPlayer(ev.Player.ReferenceHub));
+        if (LookOverrideCache.TryGetValue(ev.Player.ReferenceHub.netId, out var lookOverride) && lookOverride != null)
+            lookOverride.LastBusyTime = Time.time + (ev.Pickup.Base as ISearchable).SearchTimeForPlayer(ev.Player.ReferenceHub);
     }
 
     public void OnPickedUp(PlayerSearchedPickupEventArgs ev)
     {
-        if(ev.Player.ReferenceHub.TryGetComponent(out LookOverride lookOverride))
-            lookOverride.LastBusyTime = DateTime.Now;
+        if (LookOverrideCache.TryGetValue(ev.Player.ReferenceHub.netId, out var lookOverride) && lookOverride != null)
+            lookOverride.LastBusyTime = Time.time;
     }
     
-    
+    public void OnRoundRestart()
+    {
+        LookOverrideCache.Clear();
+    }
+
+    public void OnPlayerLeft(PlayerLeftEventArgs ev)
+    {
+        LookOverrideCache.Remove(ev.Player.ReferenceHub.netId);
+    }
 
     public void RegisterEvents()
     {
-        if(IncompatiblePluginDetected) return;
+        if (IncompatiblePluginDetected) return;
         LabApi.Events.Handlers.PlayerEvents.ShotWeapon += OnShoot;
         LabApi.Events.Handlers.PlayerEvents.AimedWeapon += ToggleAds;
         LabApi.Events.Handlers.PlayerEvents.UsingItem += OnStartUsingItem;
@@ -165,15 +181,17 @@ public class FakeLookHandler
         LabApi.Events.Handlers.PlayerEvents.CancelledUsingItem += OnCancelUseItem;
         LabApi.Events.Handlers.PlayerEvents.SearchingPickup += OnPickingUp;
         LabApi.Events.Handlers.PlayerEvents.SearchedPickup += OnPickedUp;
-        
+        LabApi.Events.Handlers.PlayerEvents.Left += OnPlayerLeft;
+        LabApi.Events.Handlers.ServerEvents.RoundRestarted  += OnRoundRestart;
+
         LabApi.Events.Handlers.PlayerEvents.Spawned += OnSpawn;
         LabApi.Events.Handlers.PlayerEvents.ValidatedVisibility += OnPlayerValidatedVisibility;
         FpcServerPositionDistributor.RoleSyncEvent += OnRoleSyncEvent;
     }
-    
+
     public void UnregisterEvents()
     {
-        if(IncompatiblePluginDetected) return;
+        if (IncompatiblePluginDetected) return;
         LabApi.Events.Handlers.PlayerEvents.ShotWeapon -= OnShoot;
         LabApi.Events.Handlers.PlayerEvents.AimedWeapon -= ToggleAds;
         LabApi.Events.Handlers.PlayerEvents.UsingItem -= OnStartUsingItem;
@@ -181,9 +199,13 @@ public class FakeLookHandler
         LabApi.Events.Handlers.PlayerEvents.CancelledUsingItem -= OnCancelUseItem;
         LabApi.Events.Handlers.PlayerEvents.SearchingPickup -= OnPickingUp;
         LabApi.Events.Handlers.PlayerEvents.SearchedPickup -= OnPickedUp;
-        
+        LabApi.Events.Handlers.PlayerEvents.Left -= OnPlayerLeft;
+        LabApi.Events.Handlers.ServerEvents.RoundRestarted -= OnRoundRestart;
+
         LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
         LabApi.Events.Handlers.PlayerEvents.ValidatedVisibility -= OnPlayerValidatedVisibility;
         FpcServerPositionDistributor.RoleSyncEvent -= OnRoleSyncEvent;
+
+        LookOverrideCache.Clear();
     }
 }

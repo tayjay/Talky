@@ -1,8 +1,8 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using LabApi.Features.Wrappers;
+using PlayerRoles.FirstPersonControl;
 using UnityEngine;
+using Random = UnityEngine.Random;
 
 namespace Talky;
 
@@ -12,57 +12,82 @@ public class LookOverride : MonoBehaviour
 
     public ReferenceHub hub => player.ReferenceHub;
 
-    public List<Vector2> lookOffsets;
-    
-    public SpeechTracker speechTracker;
+    private Vector2 _headBobOffset;
+    private Vector2 _glanceOffset;
+
+    // Throttling for glance calculation
+    private float _lastGlanceCalcTime;
+    private const float GlanceCalcInterval = 0.05f; // 20Hz instead of every frame
+
+    //public SpeechTracker speechTracker;
 
     public static Config TalkyConfig => Plugin.Instance.Config;
-    
-    public Vector2 LastLookOffset { get; private set; }
-    
-    public DateTime LastBusyTime { get; set; }
 
-    public float Reflex, Attention;
+    public Vector2 LastLookOffset { get; private set; }
+
+    public float LastBusyTime { get; set; }
+    public float LastManualLookTime { get; set; }
+
+    //public float Attention;
 
 
     private void Awake()
     {
         player = Player.Get(GetComponent<ReferenceHub>());
-        lookOffsets = new List<Vector2>();
-        speechTracker = GetComponent<SpeechTracker>();
+        _headBobOffset = Vector2.zero;
+        _glanceOffset = Vector2.zero;
+        //speechTracker = GetComponent<SpeechTracker>();
         LastLookOffset = Vector2.zero;
-        LastBusyTime = DateTime.Now;
-        Reflex = TalkyConfig.GlanceDynamicTraits ? UnityEngine.Random.Range(0.8f, 1.25f) : 1f; // How quickly a player will look at a target compared to others
-        Attention = TalkyConfig.GlanceDynamicTraits ? UnityEngine.Random.Range(0.8f, 1.25f) : 1f; // How long a player will look at talking players compared to others
+        LastBusyTime = Time.time;
+        LastManualLookTime = Time.time;
+        //Reflex = TalkyConfig.GlanceDynamicTraits ? Random.Range(0.9f, 1.25f) : 1f; // How quickly a player will look at a target compared to others
+        //Attention = TalkyConfig.GlanceDynamicTraits ? Random.Range(0.9f, 1.25f) : 1f; // How long a player will look at talking players compared to others
     }
 
     private void Update()
     {
-        lookOffsets.Clear();
-        
-        if(DateTime.Now - LastBusyTime < TimeSpan.FromSeconds(0.1)) return;
-        
-        // Head bobbing based on speech volume
-        if(TalkyConfig.EnableHeadBob)
+        if (Time.time - LastBusyTime < 0.1f)
+        {
+            _glanceOffset = Vector2.zero;
+            _headBobOffset = Vector2.zero;
+            return;
+        }
+
+        // Head bobbing based on speech volume (runs every frame for smooth animation)
+        _headBobOffset = Vector2.zero;
+        if (TalkyConfig.EnableHeadBobbing)
             CalculateSpeechHeadBob();
 
-        // Glance at nearby speaking players
-        if(TalkyConfig.EnableGlancing)
+        if ((player.RoleBase is IFpcRole role) && role.FpcModule.Motor.RotationDetected)
+        {
+            _glanceOffset = Vector2.zero;
+            LastManualLookTime  = Time.time;
+        }
+        
+        if (Time.time  - LastManualLookTime < 1f) return;
+
+        // Glance at nearby speaking players (throttled to reduce CPU usage)
+        if (TalkyConfig.EnableGlancing && Time.time - _lastGlanceCalcTime >= GlanceCalcInterval)
+        {
+            _glanceOffset = Vector2.zero;
             CalculateGlanceLook();
+            _lastGlanceCalcTime = Time.time;
+        }
     }
 
     private void CalculateSpeechHeadBob()
     {
-        if (!speechTracker.ShouldHeadBob)
+        SpeechTracker tracker = Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache[player.NetworkId];
+        if (!tracker.ShouldHeadBob)
         {
             return;
         }
-        if (speechTracker.CurrentVolumeRatio < 0)
+        if (tracker.CurrentVolumeRatio < 0)
         {
             return;
         }
-        
-        lookOffsets.Add(new Vector2(0, (speechTracker.CurrentVolumeRatio -0.25f) * TalkyConfig.HeadBobAmount));
+
+        _headBobOffset = new Vector2(0, (tracker.CurrentVolumeRatio - 0.25f) * TalkyConfig.HeadBobAmount);
     }
     
     private void CalculateGlanceLook()
@@ -71,44 +96,45 @@ public class LookOverride : MonoBehaviour
         float fovDeg = TalkyConfig.GlaceFov;                  // widen this to allow more candidates (e.g., 140–170)
         long recentMs = TalkyConfig.GlanceMaxDuration;
         float lookGain = TalkyConfig.GlaceGain;               // increase to rotate more toward target
-        float maxYaw = TalkyConfig.GlanceMaxYaw;                   // cap horizontal glance (degrees)
-        float maxPitch = TalkyConfig.GlanceMaxPitch;                 // cap vertical glance (degrees)
+        float maxYaw = TalkyConfig.GlanceMaxYaw;              // cap horizontal glance (degrees)
+        float maxPitch = TalkyConfig.GlanceMaxPitch;          // cap vertical glance (degrees)
 
         // Derived
         float minFrontDot = Mathf.Cos(0.5f * fovDeg * Mathf.Deg2Rad);
+        float maxDistSqr = maxDistance * maxDistance;
 
-        // Early outs / locals
+        // Cache player state
         var cam = player.Camera;
+        Vector3 myPos = player.Position;
         Vector3 camPos = cam.position;
         Vector3 camFwd = cam.forward;
-        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        //long nowMs = speechTracker.LastPacketTime; // Use cached value instead of DateTimeOffset.UtcNow
+        float currentTimeMs = Time.time;
+        long attentionThresholdMs = (long)(recentMs);
 
         // Find the best valid candidate
-        Vector3 targetLook = default;
         bool found = false;
         Vector3 bestPos = default;
-        float bestDot = -1f;
-        float bestDist = float.MaxValue;
-
-        foreach (var nearby in Player.List.Where(p => Vector3.Distance(player.Position, p.Position) <= maxDistance))
+        float bestScore = float.MinValue;
+        
+        foreach (var nearby in Player.List)
         {
             if (nearby == player) continue;
-            float dist = Vector3.Distance(nearby.Position, player.Position);
-            if (dist > maxDistance) continue;
-            if ((nowMs - this.speechTracker.LastPacketTime) >= recentMs * Attention)
-            {
-                // This player is not talking, is anyone nearby talking?
-                if (!nearby.ReferenceHub.TryGetComponent(out SpeechTracker st)) continue;
 
-                // Must have spoken within recentMs
-                if ((nowMs - st.LastPacketTime) > recentMs * Attention) continue;
-            }
-            else
+            Vector3 nearbyPos = nearby.Position;
+            float distSqr = (nearbyPos - myPos).sqrMagnitude;
+            if (distSqr > maxDistSqr) continue;
+
+            
+
+            // Check if nearby player has a speech tracker and is speaking
+            if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(nearby.NetworkId, out SpeechTracker nearbySpeechTracker))
             {
-                // this player has recently talked, they are focused on talking
                 continue;
             }
-            
+
+            // Must have spoken within recentMs
+            if ((currentTimeMs - nearbySpeechTracker.LastPacketTime) *1000 > attentionThresholdMs) continue;
 
             Vector3 candidate = nearby.Camera.position;
             Vector3 dirWorld = (candidate - camPos).normalized;
@@ -116,35 +142,35 @@ public class LookOverride : MonoBehaviour
             float frontDot = Vector3.Dot(camFwd, dirWorld);
             if (frontDot < minFrontDot) continue; // outside your frontal cone
 
+            // Calculate distance for scoring (use sqrt only here where needed)
+            float dist = Mathf.Sqrt(distSqr);
+
             // Prefer the most centered (largest dot). Use a scoring system to appear more dynamic
-            if((0.8f * frontDot - 0.2f * (dist/maxDistance)) > (0.8f * bestDot - 0.2f * (bestDist/maxDistance)))
-            //if (frontDot > bestDot || (Mathf.Approximately(frontDot, bestDot) && dist < bestDist))
+            float score = 0.8f * frontDot - 0.2f * (dist / maxDistance);
+            if (score > bestScore)
             {
-                bestDot = frontDot;
-                bestDist = dist;
+                bestScore = score;
                 bestPos = candidate;
                 found = true;
             }
         }
 
-        if (found)
-        {
-            targetLook = bestPos;
-        } else
+        if (!found)
         {
             return; // no valid target
         }
-            
+
+        Vector3 targetLook = bestPos;
 
         // Convert to camera-local direction for yaw/pitch extraction
         Vector3 dirLocal = cam.InverseTransformDirection((targetLook - camPos).normalized);
 
         // Left/right (yaw), up/down (pitch)
-        float yawDeg   = Mathf.Atan2(dirLocal.x, dirLocal.z) * Mathf.Rad2Deg;
+        float yawDeg = Mathf.Atan2(dirLocal.x, dirLocal.z) * Mathf.Rad2Deg;
         float pitchDeg = Mathf.Asin(Mathf.Clamp(dirLocal.y, -1f, 1f)) * Mathf.Rad2Deg;
 
         // Distance smoothing (smoothstep for a less "linear" feel)
-        float d = Vector3.Distance(player.Position, targetLook);
+        float d = (myPos - targetLook).magnitude;
         float t = 1f - Mathf.Clamp01(d / maxDistance);
         float distanceFactor = t * t * (3f - 2f * t); // smoothstep(0..1)
 
@@ -157,11 +183,11 @@ public class LookOverride : MonoBehaviour
         float intensity = Mathf.Clamp01(lookGain * distanceFactor * frontBias);
 
         // Cap max contribution so glances stay subtle and natural
-        float cappedYaw   = Mathf.Clamp(yawDeg,   -maxYaw,   maxYaw);
+        float cappedYaw = Mathf.Clamp(yawDeg, -maxYaw, maxYaw);
         float cappedPitch = Mathf.Clamp(pitchDeg, -maxPitch, maxPitch);
 
-        // Add the offset (yaw, pitch) — note ordering!
-        lookOffsets.Add(new Vector2(cappedYaw, cappedPitch) * intensity);
+        // Store the offset (yaw, pitch)
+        _glanceOffset = new Vector2(cappedYaw, cappedPitch) * intensity;
     }
 
 
@@ -171,18 +197,13 @@ public class LookOverride : MonoBehaviour
     {
         Vector2 lookOffset = Vector2.zero;
         Vector2 goal = GetLookGoal();
-        lookOffset = Vector2.Lerp(LastLookOffset, goal, Time.deltaTime * 7f * Reflex);
+        lookOffset = Vector2.Lerp(LastLookOffset, goal, Time.deltaTime * 7f);
         LastLookOffset = lookOffset;
         return lookOffset;
     }
 
     public Vector2 GetLookGoal()
     {
-        Vector2 totalOffset = Vector2.zero;
-        foreach (var offset in lookOffsets)
-        {
-            totalOffset += offset;
-        }
-        return totalOffset;
+        return _headBobOffset + _glanceOffset;
     }
 }
