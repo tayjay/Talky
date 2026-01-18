@@ -17,6 +17,9 @@ namespace Talky
         [Description("Time in milliseconds for the mouth to reset to default after the player stops talking. Default is 500ms.")]
         public int EmotionResetTime { get; set; } = 500;
         
+        [Description("How often to update volume. Default is 0.033f (30Hz)")]
+        public float SpeechUpdateInterval = 0.033f;
+        
         [Description("Allow players to use the Animate - Grab kebind to make their character reach out. Default is true.")]
         public bool EnableGrabAnimation { get; set; } = true;
         

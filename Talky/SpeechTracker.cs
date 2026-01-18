@@ -28,7 +28,6 @@ namespace Talky
 
         // Throttling - 30Hz is sufficient for mouth animations
         private float _lastUpdateTime;
-        private const float UpdateInterval = 0.033f;
 
         private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
         private long _overrideEndTime = 0;
@@ -89,7 +88,7 @@ namespace Talky
                 }
 
                 // Throttle updates to 30Hz - mouth animations don't need 60+ fps
-                if (Time.time - _lastUpdateTime < UpdateInterval)
+                if (Time.time - _lastUpdateTime < Plugin.Instance.Config.SpeechUpdateInterval)
                     return;
                 _lastUpdateTime = Time.time;
 
