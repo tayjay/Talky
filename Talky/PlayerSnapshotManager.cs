@@ -52,7 +52,7 @@ public class PlayerSnapshotManager
                 });
             }
             Snapshots = list;
-            yield return Timing.WaitForOneFrame;
+            yield return Timing.WaitForSeconds(0.033f);
         }
     }
 

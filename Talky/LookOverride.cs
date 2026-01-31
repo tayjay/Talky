@@ -132,20 +132,22 @@ public class LookOverride : MonoBehaviour
         Vector3 bestPos = default;
         float bestScore = float.MinValue;
 
-        var snapshots = Plugin.Instance.PlayerSnapshotManager.Snapshots;
-        foreach (var snapshot in snapshots)
+        
+        foreach (var player in Player.List)
         {
-            if (snapshot.NetworkId == player.NetworkId) continue;
-
-            Vector3 nearbyPos = snapshot.Position;
+            if (player.NetworkId == player.NetworkId) continue;
+            if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(player.NetworkId, out var tracker))
+                continue;
+            Vector3 nearbyPos = player.Position;
             float distSqr = (nearbyPos - myPos).sqrMagnitude;
             if (distSqr > maxDistSqr) continue;
-
+            
+            
             // Must have spoken within recentMs
-            if (snapshot.LastPacketTime < 0) continue;
-            if ((currentTime - snapshot.LastPacketTime) * 1000 > recentMs) continue;
+            if (tracker.LastPacketTime < 0) continue;
+            if ((currentTime - tracker.LastPacketTime) * 1000 > recentMs) continue;
 
-            Vector3 candidate = snapshot.CameraPosition;
+            Vector3 candidate = player.Camera.position;
             Vector3 dirWorld = (candidate - camPos).normalized;
 
             float frontDot = Vector3.Dot(camFwd, dirWorld);
