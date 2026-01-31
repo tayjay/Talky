@@ -20,7 +20,6 @@ public class FakeLookHandler
 
     // Cache LookOverride components to avoid TryGetComponent calls in hot paths
     public readonly Dictionary<uint, LookOverride> LookOverrideCache = new Dictionary<uint, LookOverride>();
-    
 
     public void OnSpawn(PlayerSpawnedEventArgs ev)
     {
@@ -205,7 +204,6 @@ public class FakeLookHandler
         LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
         LabApi.Events.Handlers.PlayerEvents.ValidatedVisibility -= OnPlayerValidatedVisibility;
         FpcServerPositionDistributor.RoleSyncEvent -= OnRoleSyncEvent;
-
         LookOverrideCache.Clear();
     }
 }

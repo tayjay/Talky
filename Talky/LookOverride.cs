@@ -1,7 +1,9 @@
 ﻿using System;
 using LabApi.Features.Wrappers;
+using PlayerRoles;
 using PlayerRoles.FirstPersonControl;
 using UnityEngine;
+using Logger = LabApi.Features.Console.Logger;
 using Random = UnityEngine.Random;
 
 namespace Talky;
@@ -46,6 +48,19 @@ public class LookOverride : MonoBehaviour
 
     private void Update()
     {
+        
+        if (!player.Role.IsHuman())
+        {
+            // Non-animated character model speaking, can delete self.
+#if EXILED
+                    Exiled.API.Features.Log.Debug("Removing LookOverride from non-animated model player " + player.Nickname);
+#else
+            Logger.Debug("Removing LookOverride from non-animated model player " + player.Nickname, Plugin.Instance.Config.Debug);
+#endif
+            Destroy(this);
+            return;
+        }
+        
         if (Time.time - LastBusyTime < 0.1f)
         {
             _glanceOffset = Vector2.zero;
@@ -63,7 +78,7 @@ public class LookOverride : MonoBehaviour
             _glanceOffset = Vector2.zero;
             LastManualLookTime  = Time.time;
         }
-        
+
         if (Time.time  - LastManualLookTime < 1f) return;
 
         // Glance at nearby speaking players (throttled to reduce CPU usage)
@@ -77,7 +92,9 @@ public class LookOverride : MonoBehaviour
 
     private void CalculateSpeechHeadBob()
     {
-        SpeechTracker tracker = Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache[player.NetworkId];
+        if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(player.NetworkId,
+                out SpeechTracker tracker)) return;
+        
         if (!tracker.ShouldHeadBob)
         {
             return;
@@ -89,7 +106,7 @@ public class LookOverride : MonoBehaviour
 
         _headBobOffset = new Vector2(0, (tracker.CurrentVolumeRatio - 0.25f) * TalkyConfig.HeadBobAmount);
     }
-    
+
     private void CalculateGlanceLook()
     {
         float maxDistance = TalkyConfig.GlaceRange;
@@ -108,35 +125,27 @@ public class LookOverride : MonoBehaviour
         Vector3 myPos = player.Position;
         Vector3 camPos = cam.position;
         Vector3 camFwd = cam.forward;
-        //long nowMs = speechTracker.LastPacketTime; // Use cached value instead of DateTimeOffset.UtcNow
-        float currentTimeMs = Time.time;
-        long attentionThresholdMs = (long)(recentMs);
+        float currentTime = Time.time;
 
-        // Find the best valid candidate
+        // Find the best valid candidate using snapshots
         bool found = false;
         Vector3 bestPos = default;
         float bestScore = float.MinValue;
-        
-        foreach (var nearby in Player.List)
-        {
-            if (nearby == player) continue;
 
-            Vector3 nearbyPos = nearby.Position;
+        var snapshots = Plugin.Instance.PlayerSnapshotManager.Snapshots;
+        foreach (var snapshot in snapshots)
+        {
+            if (snapshot.NetworkId == player.NetworkId) continue;
+
+            Vector3 nearbyPos = snapshot.Position;
             float distSqr = (nearbyPos - myPos).sqrMagnitude;
             if (distSqr > maxDistSqr) continue;
 
-            
-
-            // Check if nearby player has a speech tracker and is speaking
-            if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(nearby.NetworkId, out SpeechTracker nearbySpeechTracker))
-            {
-                continue;
-            }
-
             // Must have spoken within recentMs
-            if ((currentTimeMs - nearbySpeechTracker.LastPacketTime) *1000 > attentionThresholdMs) continue;
+            if (snapshot.LastPacketTime < 0) continue;
+            if ((currentTime - snapshot.LastPacketTime) * 1000 > recentMs) continue;
 
-            Vector3 candidate = nearby.Camera.position;
+            Vector3 candidate = snapshot.CameraPosition;
             Vector3 dirWorld = (candidate - camPos).normalized;
 
             float frontDot = Vector3.Dot(camFwd, dirWorld);
@@ -191,8 +200,8 @@ public class LookOverride : MonoBehaviour
     }
 
 
-    
-    
+
+
     public Vector2 GetLookOffset()
     {
         Vector2 lookOffset = Vector2.zero;

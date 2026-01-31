@@ -19,9 +19,12 @@ namespace Talky
     {
         public VoiceChattingHandler VoiceChattingHandler;
         public FakeLookHandler FakeLookHandler;
+        public PlayerSnapshotManager PlayerSnapshotManager;
         //public static OverlayAnimationHandler overlayAnimationHandler;
         public SSTalkySettings Settings;
         public static Plugin Instance { get; private set; }
+        
+        
         
 #if EXILED
         public override void OnEnabled()
@@ -41,9 +44,11 @@ namespace Talky
             Settings.Activate();
             VoiceChattingHandler =  new VoiceChattingHandler();
             FakeLookHandler = new FakeLookHandler();
-            
+            PlayerSnapshotManager = new PlayerSnapshotManager();
+
             VoiceChattingHandler.RegisterEvents();
             FakeLookHandler.RegisterEvents();
+            PlayerSnapshotManager.RegisterEvents();
 
             FakeLookHandler.IncompatiblePluginDetected = !CheckCompatibility();
 
@@ -71,6 +76,11 @@ namespace Talky
             {
                 FakeLookHandler.UnregisterEvents();
                 FakeLookHandler = null;
+            }
+            if (PlayerSnapshotManager != null)
+            {
+                PlayerSnapshotManager.UnregisterEvents();
+                PlayerSnapshotManager = null;
             }
             Settings.Deactivate();
             Instance = null;
@@ -131,7 +141,7 @@ namespace Talky
 #if EXILED
         public override string Name { get; } = "Talky.EXILED";
             public override string Prefix => "Talky";
-            public override Version RequiredExiledVersion { get; } = new Version(9, 12, 2);
+            public override Version RequiredExiledVersion { get; } = new Version(9, 12, 5);
 #else 
         public override string Name { get; } = "Talky.LabAPI";
         public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";

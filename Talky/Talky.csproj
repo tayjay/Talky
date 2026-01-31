@@ -85,9 +85,6 @@
         <Reference Include="Mirror">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Mirror.dll</HintPath>
         </Reference>
-        <Reference Include="netstandard">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\netstandard.dll</HintPath>
-        </Reference>
         <Reference Include="NorthwoodLib, Version=1.4.0.0, Culture=neutral, processorArchitecture=MSIL">
           <HintPath>..\packages\ExMod.Exiled.9.12.5\lib\net48\NorthwoodLib.dll</HintPath>
         </Reference>
@@ -117,6 +114,7 @@
         <Compile Include="Plugin.cs" />
         <Compile Include="Properties\AssemblyInfo.cs"/>
         <Compile Include="FakeLookHandler.cs" />
+        <Compile Include="PlayerSnapshotManager.cs" />
         <Compile Include="SpeechTracker.cs" />
         <Compile Include="SSTalkySettings.cs" />
         <Compile Include="TranslationsConfig.cs" />

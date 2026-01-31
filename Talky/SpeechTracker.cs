@@ -32,7 +32,6 @@ namespace Talky
         private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
         private long _overrideEndTime = 0;
         
-        
         public OpusDecoder OpusDecoder => player.VoiceModule?.Decoder;
 
         public EmotionPresetType DefaultPreset => Plugin.Instance.Settings.GetEmotionPreset(hub);
