@@ -4,7 +4,7 @@
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/tayjay/Talky/total)
 
 ![Static Badge](https://img.shields.io/badge/LabAPI-1.1.4-blue)
-![Static Badge](https://img.shields.io/badge/EXILED-9.12.1-red)
+![Static Badge](https://img.shields.io/badge/EXILED-9.12.5-red)
 
 - ![GitHub Downloads (specific asset, all releases)](https://img.shields.io/github/downloads/tayjay/Talky/Talky.LabAPI.dll?label=LabAPI%20Downloads&color=blue)
 - ![GitHub Downloads (specific asset, all releases)](https://img.shields.io/github/downloads/tayjay/Talky/Talky.EXILED.dll?label=EXILED%20Downloads&color=red)
@@ -19,5 +19,5 @@
 <img width="1368" height="191" alt="image" src="https://github.com/user-attachments/assets/c26bb24d-72cd-4db3-95b2-31d89aeef815" />
 
 ## Example:
-https://github.com/user-attachments/assets/14e723fc-dd7c-405b-94c3-eafd4173427a
+https://github.com/user-attachments/assets/35585a2a-e90b-49e4-80f3-b2c02f975b3b
 
