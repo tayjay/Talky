@@ -10,12 +10,13 @@ namespace Talky;
 
 public class LookOverride : MonoBehaviour
 {
-    public Player player;
+    public Player Player;
 
-    public ReferenceHub hub => player.ReferenceHub;
+    public ReferenceHub Hub => Player.ReferenceHub;
 
     private Vector2 _headBobOffset;
     private Vector2 _glanceOffset;
+    private Vector2 _reactOffset;
 
     // Throttling for glance calculation
     private float _lastGlanceCalcTime;
@@ -35,9 +36,10 @@ public class LookOverride : MonoBehaviour
 
     private void Awake()
     {
-        player = Player.Get(GetComponent<ReferenceHub>());
+        Player = Player.Get(GetComponent<ReferenceHub>());
         _headBobOffset = Vector2.zero;
         _glanceOffset = Vector2.zero;
+        _reactOffset = Vector2.zero;
         //speechTracker = GetComponent<SpeechTracker>();
         LastLookOffset = Vector2.zero;
         LastBusyTime = Time.time;
@@ -49,18 +51,25 @@ public class LookOverride : MonoBehaviour
     private void Update()
     {
         
-        if (!player.Role.IsHuman())
+        if (!Player.Role.IsHuman())
         {
             // Non-animated character model speaking, can delete self.
 #if EXILED
-                    Exiled.API.Features.Log.Debug("Removing LookOverride from non-animated model player " + player.Nickname);
+                    Exiled.API.Features.Log.Debug("Removing LookOverride from non-animated model player " + Player.Nickname);
 #else
-            Logger.Debug("Removing LookOverride from non-animated model player " + player.Nickname, Plugin.Instance.Config.Debug);
+            Logger.Debug("Removing LookOverride from non-animated model player " + Player.Nickname, Plugin.Instance.Config.Debug);
 #endif
             Destroy(this);
             return;
         }
-        
+        if (Vector3.Distance(_reactOffset,Vector3.zero) > 0.05f)
+        {
+            _reactOffset = Vector3.Lerp(_reactOffset, Vector3.zero, Time.deltaTime*3);
+        }
+        else
+        {
+            _reactOffset = Vector3.zero;
+        }
         if (Time.time - LastBusyTime < 0.1f)
         {
             _glanceOffset = Vector2.zero;
@@ -73,14 +82,16 @@ public class LookOverride : MonoBehaviour
         if (TalkyConfig.EnableHeadBobbing)
             CalculateSpeechHeadBob();
 
-        if ((player.RoleBase is IFpcRole role) && role.FpcModule.Motor.RotationDetected)
+        
+        
+        if ((Player.RoleBase is IFpcRole role) && role.FpcModule.Motor.RotationDetected)
         {
             _glanceOffset = Vector2.zero;
             LastManualLookTime  = Time.time;
         }
-
+        
         if (Time.time  - LastManualLookTime < 1f) return;
-
+        
         // Glance at nearby speaking players (throttled to reduce CPU usage)
         if (TalkyConfig.EnableGlancing && Time.time - _lastGlanceCalcTime >= GlanceCalcInterval)
         {
@@ -90,9 +101,14 @@ public class LookOverride : MonoBehaviour
         }
     }
 
+    public void CauseReact(float damage)
+    {
+        _reactOffset = new Vector2(0, Math.Min(TalkyConfig.HeadBobAmount,damage));
+    }
+
     private void CalculateSpeechHeadBob()
     {
-        if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(player.NetworkId,
+        if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(Player.NetworkId,
                 out SpeechTracker tracker)) return;
         
         if (!tracker.ShouldHeadBob)
@@ -121,8 +137,8 @@ public class LookOverride : MonoBehaviour
         float maxDistSqr = maxDistance * maxDistance;
 
         // Cache player state
-        var cam = player.Camera;
-        Vector3 myPos = player.Position;
+        var cam = Player.Camera;
+        Vector3 myPos = Player.Position;
         Vector3 camPos = cam.position;
         Vector3 camFwd = cam.forward;
         float currentTime = Time.time;
@@ -133,12 +149,12 @@ public class LookOverride : MonoBehaviour
         float bestScore = float.MinValue;
 
         
-        foreach (var player in Player.List)
+        foreach (var checkingPlayer in Player.List)
         {
-            if (player.NetworkId == player.NetworkId) continue;
-            if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(player.NetworkId, out var tracker))
+            if (checkingPlayer.NetworkId == Player.NetworkId) continue;
+            if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(checkingPlayer.NetworkId, out var tracker))
                 continue;
-            Vector3 nearbyPos = player.Position;
+            Vector3 nearbyPos = checkingPlayer.Position;
             float distSqr = (nearbyPos - myPos).sqrMagnitude;
             if (distSqr > maxDistSqr) continue;
             
@@ -147,7 +163,7 @@ public class LookOverride : MonoBehaviour
             if (tracker.LastPacketTime < 0) continue;
             if ((currentTime - tracker.LastPacketTime) * 1000 > recentMs) continue;
 
-            Vector3 candidate = player.Camera.position;
+            Vector3 candidate = checkingPlayer.Camera.position;
             Vector3 dirWorld = (candidate - camPos).normalized;
 
             float frontDot = Vector3.Dot(camFwd, dirWorld);
@@ -170,7 +186,6 @@ public class LookOverride : MonoBehaviour
         {
             return; // no valid target
         }
-
         Vector3 targetLook = bestPos;
 
         // Convert to camera-local direction for yaw/pitch extraction
@@ -215,6 +230,6 @@ public class LookOverride : MonoBehaviour
 
     public Vector2 GetLookGoal()
     {
-        return _headBobOffset + _glanceOffset;
+        return _headBobOffset + _glanceOffset + _reactOffset;
     }
 }

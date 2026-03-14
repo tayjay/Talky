@@ -58,8 +58,8 @@ namespace Talky
         [Description("The maximum duration (in milliseconds) to look at voice source after they stop talking. Default is 1000ms.")]
         public long GlanceMaxDuration { get; set; } = 1000;
         
-        //[Description("Should dynamic traits be used for glancing? Makes players move at different speeds to add variety. Default is true.")]
-        //public bool GlanceDynamicTraits { get; set; } = true;
+        [Description("Should Spectators see client-side head movements? Default is false.")]
+        public bool EnabledSpectatorHeadMovements { get; set; } = false;
         
         
         [Description("Talky plugin translations")]

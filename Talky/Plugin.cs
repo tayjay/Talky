@@ -45,14 +45,12 @@ namespace Talky
             VoiceChattingHandler =  new VoiceChattingHandler();
             FakeLookHandler = new FakeLookHandler();
             PlayerSnapshotManager = new PlayerSnapshotManager();
+            
+            FakeLookHandler.RequireHarmonyPatch = CheckCedMod();
 
             VoiceChattingHandler.RegisterEvents();
             FakeLookHandler.RegisterEvents();
             PlayerSnapshotManager.RegisterEvents();
-
-            FakeLookHandler.IncompatiblePluginDetected = !CheckCompatibility();
-
-            
             
 #if EXILED
             base.OnEnabled();
@@ -82,6 +80,8 @@ namespace Talky
                 PlayerSnapshotManager.UnregisterEvents();
                 PlayerSnapshotManager = null;
             }
+            if(FakeLookHandler.RequireHarmonyPatch)
+                HarmonyBridge.RemovePatches();
             Settings.Deactivate();
             Instance = null;
 #if EXILED
@@ -89,49 +89,39 @@ namespace Talky
 #endif
         }
         
-        public bool CheckCompatibility()
+        public bool CheckCedMod()
         {
 #if EXILED
             foreach(var plugin in Exiled.Loader.Loader.Plugins)
 #else
-            foreach(var plugin in LabApi.Loader.PluginLoader.EnabledPlugins)
+            foreach(var plugin in LabApi.Loader.PluginLoader.EnabledPlugins) // CedMod has a High Priority load, will be enabled before this
 #endif  
             {
                 if (plugin.Name == "CedMod")
                 {
-                    try
+                    // Get the Singleton instance of CedMod
+                    var cedModType = plugin.GetType();
+                    var singletonField = cedModType.GetField("Singleton");
+                    var cedModInstance = singletonField.GetValue(null);
+                    // Get Config property
+                    var configProperty = cedModType.GetProperty("Config");
+                    var config = configProperty.GetValue(cedModInstance);
+                    // Get CedModConfig property
+                    var cedModConfigType = config.GetType();
+                    var cedModConfigProperty = cedModConfigType.GetProperty("CedMod");
+                    var cedModConfig = cedModConfigProperty.GetValue(config);
+                    // Get value of DisableFakeSyncing
+                    var disableFakeSyncingProperty = cedModConfig.GetType().GetProperty("DisableFakeSyncing");
+                    var disableFakeSyncingValue = (bool)disableFakeSyncingProperty.GetValue(cedModConfig);
+                    if (!disableFakeSyncingValue)
                     {
-                        // Get the Singleton instance of CedMod
-                        var cedModType = plugin.GetType();
-                        var singletonField = cedModType.GetField("Singleton");
-                        var cedModInstance = singletonField.GetValue(null);
-                        // Get Config property
-                        var configProperty = cedModType.GetProperty("Config");
-                        var config = configProperty.GetValue(cedModInstance);
-                        // Get CedModConfig property
-                        var cedModConfigType = config.GetType();
-                        var cedModConfigProperty = cedModConfigType.GetProperty("CedMod");
-                        var cedModConfig = cedModConfigProperty.GetValue(config);
-                        // Get value of DisableFakeSyncing
-                        var disableFakeSyncingProperty = cedModConfig.GetType().GetProperty("DisableFakeSyncing");
-                        var disableFakeSyncingValue = (bool)disableFakeSyncingProperty.GetValue(cedModConfig);
-                        if (!disableFakeSyncingValue)
-                        {
-                            Logger.Error(
-                                "CedMod's \"disable_fake_syncing\" is \"false\", which is incompatible with some Talky features. Please change it to \"true\" in CedMod's config to ensure full functionality.");
-                            return false;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.Error(
-                            $"An error occurred while checking CedMod's configuration for compatibility: {ex.Message}. Please ensure that CedMod's disable_fake_syncing is disabled to ensure full Talky functionality.");
-                        return false;
+                        Logger.Warn("Applying CedMod workaround patch...");
+                        HarmonyBridge.ApplyPatches();
+                        return true;
                     }
                 }
             }
-            Logger.Info($"Plugin compatibility check passed.");
-            return true;
+            return false;
         }
 
         
@@ -141,7 +131,7 @@ namespace Talky
 #if EXILED
         public override string Name { get; } = "Talky.EXILED";
             public override string Prefix => "Talky";
-            public override Version RequiredExiledVersion { get; } = new Version(9, 12, 5);
+            public override Version RequiredExiledVersion { get; } = new Version(9, 13, 1);
 #else 
         public override string Name { get; } = "Talky.LabAPI";
         public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";

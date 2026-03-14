@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using InventorySystem.Items.Firearms.Modules;
 using InventorySystem.Searching;
 using LabApi.Events.Arguments.PlayerEvents;
@@ -6,9 +7,12 @@ using Mirror;
 using PlayerRoles;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.NetworkMessages;
+using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.PlayableScps.Scp173;
 using PlayerRoles.Spectating;
+using PlayerStatsSystem;
 using UnityEngine;
+using Logger = LabApi.Features.Console.Logger;
 
 namespace Talky;
 
@@ -16,14 +20,14 @@ public class FakeLookHandler
 {
     private FpcSyncData _lastSyncData;
     private int _index = 0;
-    public bool IncompatiblePluginDetected = false;
+    public bool RequireHarmonyPatch = false;
 
     // Cache LookOverride components to avoid TryGetComponent calls in hot paths
     public readonly Dictionary<uint, LookOverride> LookOverrideCache = new Dictionary<uint, LookOverride>();
 
     public void OnSpawn(PlayerSpawnedEventArgs ev)
     {
-        if (IncompatiblePluginDetected) return;
+        //if (IncompatiblePluginDetected) return;
         var hub = ev.Player.ReferenceHub;
         if (!hub.TryGetComponent(out LookOverride tracker))
         {
@@ -76,8 +80,8 @@ public class FakeLookHandler
 
         if (target.IsSpectatedBy(receiver))
         {
-            // Don't want to move camera for spectators
-            return role;
+            if(!Plugin.Instance.Config.EnabledSpectatorHeadMovements)
+                return role;
         }
 
         // Use cached LookOverride instead of TryGetComponent
@@ -101,10 +105,52 @@ public class FakeLookHandler
         fpmm.MouseLook.CurrentVertical -= lookOffset.y;
         fpmm.MouseLook.CurrentHorizontal -= lookOffset.x;
         FpcServerPositionDistributor._bufferSyncData[_index] = newSyncData;
-        
         return role;
     }
 
+    public void CallPrefix(ReferenceHub receiver, ReferenceHub target, FirstPersonMovementModule fpmm, bool isInvisible,
+        bool nearPositioning)
+    {
+        if (!FpcServerPositionDistributor.PreviouslySent.TryGetValue(receiver.netId, out var lastSent)) return;
+        if (!lastSent.TryGetValue(target.netId, out var last)) return;
+        _lastSyncData = last;
+    }
+    
+
+    public FpcSyncData CallPostfix(ReferenceHub receiver, ReferenceHub target, FirstPersonMovementModule fpmm, bool isInvisible,
+        bool nearPositioning,FpcSyncData original)
+    {
+        if (target == receiver)
+        {
+            return original; // Don't modify own player data
+        }
+
+        if (target.IsSpectatedBy(receiver))
+        {
+            if(!Plugin.Instance.Config.EnabledSpectatorHeadMovements)
+                return original;
+        }
+
+        // Use cached LookOverride instead of TryGetComponent
+        if (!LookOverrideCache.TryGetValue(target.netId, out LookOverride tracker) || tracker == null)
+        {
+            return original;
+        }
+
+        if (target.roleManager.CurrentRole is not IFpcRole currentRole)
+        {
+            return original;
+        }
+        
+        Vector2 lookOffset = tracker.GetLookOffset();
+        fpmm.MouseLook.CurrentHorizontal += lookOffset.x;
+        fpmm.MouseLook.CurrentVertical += lookOffset.y;
+        var newSyncData = new FpcSyncData(_lastSyncData, original._state, original._bitCustom, original._position,
+            fpmm.MouseLook);
+        fpmm.MouseLook.CurrentVertical -= lookOffset.y;
+        fpmm.MouseLook.CurrentHorizontal -= lookOffset.x;
+        return newSyncData;
+    }
     
 
     public void OnShoot(PlayerShotWeaponEventArgs ev)
@@ -165,6 +211,24 @@ public class FakeLookHandler
         LookOverrideCache.Clear();
     }
 
+    public void OnHurt(PlayerHurtEventArgs ev)
+    {
+        if(!Plugin.Instance.Config.EnableReactionOnHurt) return;
+        if(!LookOverrideCache.TryGetValue(ev.Player.NetworkId, out LookOverride tracker) || tracker==null)
+        {
+            return;
+        }
+
+        int damage = 1000;
+        if (ev.DamageHandler is StandardDamageHandler standardDamageHandler)
+        {
+            damage = (int)Math.Floor(standardDamageHandler.DealtHealthDamage);
+        }
+        if(damage <=Plugin.Instance.Config.MiniumDamageForReaction ) return;
+
+        tracker.CauseReact(damage);
+    }
+
     public void OnPlayerLeft(PlayerLeftEventArgs ev)
     {
         LookOverrideCache.Remove(ev.Player.ReferenceHub.netId);
@@ -172,7 +236,7 @@ public class FakeLookHandler
 
     public void RegisterEvents()
     {
-        if (IncompatiblePluginDetected) return;
+        
         LabApi.Events.Handlers.PlayerEvents.ShotWeapon += OnShoot;
         LabApi.Events.Handlers.PlayerEvents.AimedWeapon += ToggleAds;
         LabApi.Events.Handlers.PlayerEvents.UsingItem += OnStartUsingItem;
@@ -182,15 +246,18 @@ public class FakeLookHandler
         LabApi.Events.Handlers.PlayerEvents.SearchedPickup += OnPickedUp;
         LabApi.Events.Handlers.PlayerEvents.Left += OnPlayerLeft;
         LabApi.Events.Handlers.ServerEvents.RoundRestarted  += OnRoundRestart;
+        LabApi.Events.Handlers.PlayerEvents.Hurt += OnHurt;
 
         LabApi.Events.Handlers.PlayerEvents.Spawned += OnSpawn;
+        
+        if (RequireHarmonyPatch) return;
         LabApi.Events.Handlers.PlayerEvents.ValidatedVisibility += OnPlayerValidatedVisibility;
         FpcServerPositionDistributor.RoleSyncEvent += OnRoleSyncEvent;
     }
 
     public void UnregisterEvents()
     {
-        if (IncompatiblePluginDetected) return;
+        
         LabApi.Events.Handlers.PlayerEvents.ShotWeapon -= OnShoot;
         LabApi.Events.Handlers.PlayerEvents.AimedWeapon -= ToggleAds;
         LabApi.Events.Handlers.PlayerEvents.UsingItem -= OnStartUsingItem;
@@ -200,10 +267,13 @@ public class FakeLookHandler
         LabApi.Events.Handlers.PlayerEvents.SearchedPickup -= OnPickedUp;
         LabApi.Events.Handlers.PlayerEvents.Left -= OnPlayerLeft;
         LabApi.Events.Handlers.ServerEvents.RoundRestarted -= OnRoundRestart;
+        LabApi.Events.Handlers.PlayerEvents.Hurt -= OnHurt;
 
         LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
+        LookOverrideCache.Clear();
+        
+        if (RequireHarmonyPatch) return;
         LabApi.Events.Handlers.PlayerEvents.ValidatedVisibility -= OnPlayerValidatedVisibility;
         FpcServerPositionDistributor.RoleSyncEvent -= OnRoleSyncEvent;
-        LookOverrideCache.Clear();
     }
 }
