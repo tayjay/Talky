@@ -95,9 +95,24 @@ public class FakeLookHandler
             return role;
         }
         
+        // RoleSyncEvent also fires from PlayerRoleManager.SendNewRoleInfo during role
+        // changes, outside the WriteAll position-distribution cycle. In that path,
+        // PreviouslySent isn't populated for this receiver, _lastSyncData is stale,
+        // and the buffer indices don't correspond to this (receiver, target) pair.
+        if (!FpcServerPositionDistributor.PreviouslySent.TryGetValue(receiver.netId, out var receiverPrev))
+        {
+            return role;
+        }
+        
+        if(!receiverPrev.TryGetValue(target.netId, out var _))
+        {
+            // This should never happen because the sync data should have been cached in CallPrefix, but just in case
+            return role;
+        }
+
         FirstPersonMovementModule fpmm = currentRole.FpcModule;
         // Now we need to modify the sync data
-        FpcServerPositionDistributor.PreviouslySent[receiver.netId][target.netId] = _lastSyncData;
+        receiverPrev[target.netId] = _lastSyncData;
         Vector2 lookOffset = tracker.GetLookOffset();
         fpmm.MouseLook.CurrentHorizontal += lookOffset.x;
         fpmm.MouseLook.CurrentVertical += lookOffset.y;
