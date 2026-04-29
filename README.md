@@ -18,6 +18,8 @@
 - Config includes Translation options to customize the plugin for your players.
 <img width="1368" height="191" alt="image" src="https://github.com/user-attachments/assets/c26bb24d-72cd-4db3-95b2-31d89aeef815" />
 
-## Example:
+## Examples:
 https://github.com/user-attachments/assets/35585a2a-e90b-49e4-80f3-b2c02f975b3b
+
+https://github.com/user-attachments/assets/b3c1d5e1-be68-4c4d-ad11-eed4b7561870
 
