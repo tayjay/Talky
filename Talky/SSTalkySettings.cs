@@ -66,7 +66,7 @@ namespace Talky
 
         public bool GetEnableTalking(ReferenceHub hub)
         {
-            return ServerSpecificSettingsSync.GetSettingOfUser<SSTwoButtonsSetting>(hub, enalbeTalking.SettingId).SyncIsA;
+            return ServerSpecificSettingsSync.GetSettingOfUser<SSTwoButtonsSetting>(hub, enalbeTalking.SettingId).SyncIsB;
         }
         
         private void ProcessUserInput(ReferenceHub hub, ServerSpecificSettingBase setting)
