@@ -3,8 +3,8 @@
 ![GitHub Release](https://img.shields.io/github/v/release/tayjay/Talky)
 ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/tayjay/Talky/total)
 
-![Static Badge](https://img.shields.io/badge/LabAPI-1.1.4-blue)
-![Static Badge](https://img.shields.io/badge/EXILED-9.12.5-red)
+![Static Badge](https://img.shields.io/badge/LabAPI-1.1.7-blue)
+![Static Badge](https://img.shields.io/badge/EXILED-9.14.1-red)
 
 - ![GitHub Downloads (specific asset, all releases)](https://img.shields.io/github/downloads/tayjay/Talky/Talky.LabAPI.dll?label=LabAPI%20Downloads&color=blue)
 - ![GitHub Downloads (specific asset, all releases)](https://img.shields.io/github/downloads/tayjay/Talky/Talky.EXILED.dll?label=EXILED%20Downloads&color=red)
