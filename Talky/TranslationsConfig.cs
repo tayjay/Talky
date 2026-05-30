@@ -15,6 +15,11 @@ public class TranslationsConfig
     public string SSDefaultEmotionLabel { get; set; } = "Default Emotion";
     [Description("Hint for the Default Emotion dropdown setting.")]
     public string SSDefaultEmotionHint { get; set; } = "How you look when not talking.";
+    [Description("Label for the Enable Talking toggle setting.")]
+    public string SSEnableTalkingLabel { get; set; } = "Enable Talking";
+
+    [Description("Hint for the Enable Talking toggle setting.")]
+    public string SSEnableTalkingHint { get; set; } = "Whether to animate your face while talking.";
     
     [Description("Emotion preset options. Changing these will change the options in the Default Emotion dropdown setting.")]
     public string Neutral { get; set; } = "Neutral";
@@ -25,4 +30,6 @@ public class TranslationsConfig
     public string Chad { get; set; } = "Chad";
     public string Ogre { get; set; } = "Ogre";
     
+    public string SSEnabled { get; set; } = "Enabled";
+    public string SSDisabled { get; set; } = "Disabled";
 }

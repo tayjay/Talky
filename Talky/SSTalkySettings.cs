@@ -14,6 +14,7 @@ namespace Talky
     {
         private SSKeybindSetting grabKeybind;
         private SSDropdownSetting defaultEmotionDropdown;
+        private SSTwoButtonsSetting enalbeTalking;
         public void Activate()
         {
             grabKeybind = new SSKeybindSetting(null, Plugin.Instance.Config.Translations.SSGrabLabel , KeyCode.H, allowSpectatorTrigger: false,
@@ -30,12 +31,17 @@ namespace Talky
             ];
             
             defaultEmotionDropdown = new SSDropdownSetting(null, Plugin.Instance.Config.Translations.SSDefaultEmotionLabel, emotions, hint: Plugin.Instance.Config.Translations.SSDefaultEmotionHint);
-            var settings = new ServerSpecificSettingBase[3]
+            
+            enalbeTalking = new SSTwoButtonsSetting(null, Plugin.Instance.Config.Translations.SSEnableTalkingLabel, Plugin.Instance.Config.Translations.SSDisabled, Plugin.Instance.Config.Translations.SSEnabled, true, Plugin.Instance.Config.Translations.SSEnableTalkingHint);
+
+            var settings = new ServerSpecificSettingBase[4]
             {
                 new SSGroupHeader(Plugin.Instance.Config.Translations.SSGroupLabel),
                 defaultEmotionDropdown,
-                grabKeybind
+                grabKeybind,
+                enalbeTalking,
             };
+            
             
             if(ServerSpecificSettingsSync.DefinedSettings == null)
                 ServerSpecificSettingsSync.DefinedSettings = settings;
@@ -56,6 +62,11 @@ namespace Talky
             int setting = ServerSpecificSettingsSync.GetSettingOfUser<SSDropdownSetting>(hub, defaultEmotionDropdown.SettingId).SyncSelectionIndexRaw;
             type = (EmotionPresetType)setting;
             return type;
+        }
+
+        public bool GetEnableTalking(ReferenceHub hub)
+        {
+            return ServerSpecificSettingsSync.GetSettingOfUser<SSTwoButtonsSetting>(hub, enalbeTalking.SettingId).SyncIsA;
         }
         
         private void ProcessUserInput(ReferenceHub hub, ServerSpecificSettingBase setting)
@@ -91,9 +102,16 @@ namespace Talky
             {
                 var player = Player.Get(hub);
                 EmotionPresetType preset = GetEmotionPreset(hub);
-                //player.ReferenceHub.ServerSetEmotionPreset(preset);
                 player.Emotion = preset;
-
+            } else if (setting.SettingId == enalbeTalking.SettingId)
+            {
+                var player = Player.Get(hub);
+                if (setting is SSTwoButtonsSetting twoButtonsSetting)
+                {
+                    //bool enabled = twoButtonsSetting.SyncIsA;
+                    EmotionPresetType preset = GetEmotionPreset(hub);
+                    player.Emotion = preset;
+                }
             }
         }
     }

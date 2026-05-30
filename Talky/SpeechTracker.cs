@@ -58,10 +58,13 @@ namespace Talky
             }
         }
 
+        public bool ShouldAnimateFace { get; set; }
+
 
         // Use this for initialization
         void Awake () {
             player = Player.Get(GetComponent<ReferenceHub>());
+            ShouldAnimateFace = Plugin.Instance.Settings.GetEnableTalking(player.ReferenceHub);
             LastLevel = SpeechLevel.Init;
             _buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             Proxy = null;
@@ -105,7 +108,7 @@ namespace Talky
                 // Fix default preset not applying on spawn.
                 if (LastLevel == SpeechLevel.Init)
                 {
-                    player.Emotion = DefaultPreset;
+                    if(ShouldAnimateFace) player.Emotion = DefaultPreset;
                     LastLevel = SpeechLevel.Reset;
                 }
 
@@ -116,7 +119,7 @@ namespace Talky
                     if (LastLevel != SpeechLevel.Reset)
                     {
                         //hub.ServerSetEmotionPreset(DefaultPreset);
-                        player.Emotion = DefaultPreset;
+                        if(ShouldAnimateFace) player.Emotion = DefaultPreset;
                         LastLevel = SpeechLevel.Reset;
                         CurrentVolumeRatio = 0;
                     }
@@ -149,6 +152,7 @@ namespace Talky
                     if (level != LastLevel)
                     {
                         LastLevel = level;
+                        if (!ShouldAnimateFace) return;
                         switch (level)
                         {
                             case SpeechLevel.Silent:
