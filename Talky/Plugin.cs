@@ -131,7 +131,7 @@ namespace Talky
 #if EXILED
         public override string Name { get; } = "Talky.EXILED";
             public override string Prefix => "Talky";
-            public override Version RequiredExiledVersion { get; } = new Version(9, 13, 1);
+            public override Version RequiredExiledVersion { get; } = new Version(9, 14, 1);
 #else 
         public override string Name { get; } = "Talky.LabAPI";
         public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";
