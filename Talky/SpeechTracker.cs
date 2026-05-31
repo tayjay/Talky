@@ -77,17 +77,6 @@ namespace Talky
         void Update () {
             try
             {
-                if (!player.Role.IsHuman())
-                {
-                    // Non-animated character model speaking, can delete self.
-#if EXILED
-                    Exiled.API.Features.Log.Debug("Removing SpeechTracker from non-animated model player " + player.Nickname);
-#else
-                    Logger.Debug("Removing SpeechTracker from non-animated model player " + player.Nickname, Plugin.Instance.Config.Debug);
-#endif
-                    Destroy(this);
-                    return;
-                }
 
                 // Throttle updates to 30Hz - mouth animations don't need 60+ fps
                 if (Time.time - _lastUpdateTime < Plugin.Instance.Config.SpeechUpdateInterval)
@@ -129,8 +118,7 @@ namespace Talky
                 {
                     //Player is attempting to speak, need to check how loud they currently are to determine how their mouth should behave
                     
-                    float volume = CalculateRMSVolume();
-                    float dbVolume = 20f * Mathf.Log10(volume);
+                    float dbVolume = 20f * Mathf.Log10(CalculateRMSVolume());
                     
                     SpeechLevel level = SpeechLevel.Silent;
                     if ( dbVolume < Plugin.Instance.Config.LowDbThreshold)
@@ -156,17 +144,15 @@ namespace Talky
                         switch (level)
                         {
                             case SpeechLevel.Silent:
-                                player.Emotion = EmotionPresetType.Neutral;
+                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Neutral;
                                 break;
                             case SpeechLevel.Quiet:
-                                player.Emotion = EmotionPresetType.Happy;
+                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Happy;
                                 break;
                             case SpeechLevel.Loud:
-                                player.Emotion = EmotionPresetType.Scared;
+                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Scared;
                                 break;
                         }
-
-                        
                     }
                 }
 
@@ -211,11 +197,7 @@ namespace Talky
 
                 } catch (Exception e)
                 {
-#if EXILED
-                Exiled.API.Features.Log.Debug("Error decoding voice message: " + e);
-#else
                     Logger.Debug("Error decoding voice message: " + e, Plugin.Instance.Config.Debug);
-#endif
                 }
             //});
             
@@ -227,15 +209,13 @@ namespace Talky
          */
         public void OverrideEmotion(EmotionPresetType preset, int durationMs)
         {
+            if(!ShouldAnimateFace) return;
             _overridePreset = preset;
             _overrideEndTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + durationMs;
             //hub.ServerSetEmotionPreset(_overridePreset);
             player.Emotion = _overridePreset;
-#if EXILED
-            Exiled.API.Features.Log.Debug("Overriding emotion preset to " + preset + " for " + durationMs + "ms");
-#else
+
             Logger.Debug("Overriding emotion preset to " + preset + " for " + durationMs + "ms", Plugin.Instance.Config.Debug);
-#endif
         }
         
         

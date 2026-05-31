@@ -14,10 +14,15 @@ internal static class HarmonyBridge
     //public static Harmony HarmonyInstance;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool HarmonyPresent()
+    {
+        return AppDomain.CurrentDomain.GetAssemblies().Any(assembly => assembly.GetName().Name == "0Harmony");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static void ApplyPatches()
     {
-        var harmonyAsm = AppDomain.CurrentDomain.GetAssemblies()
-            .First(a => a.GetName().Name == "0Harmony");
+        if (!HarmonyPresent()) return;
 
         var harmony = new HarmonyLib.Harmony("ca.taytay.talky");
         
@@ -25,6 +30,8 @@ internal static class HarmonyBridge
         var original = AccessTools.Method("CedMod.Addons.Sentinal.Patches.FpcServerPositionDistributorPatch:GetNewSyncData",
             [typeof(ReferenceHub), typeof(ReferenceHub), typeof(FirstPersonMovementModule), typeof(bool),typeof(bool)]);
 
+        if (original == null) return;
+        
         harmony.Patch(original, new HarmonyMethod(typeof(HarmonyBridge), nameof(Prefix)),
             new HarmonyMethod(typeof(HarmonyBridge), nameof(Postfix)));
     }
@@ -32,6 +39,8 @@ internal static class HarmonyBridge
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void RemovePatches()
     {
+        if(!HarmonyPresent()) return;
+        
         var harmony = new Harmony("ca.taytay.talky");
         harmony.UnpatchAll();
     }

@@ -16,7 +16,7 @@
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
-        <AssemblyName>Talky.LabAPI.Debug</AssemblyName>
+        <AssemblyName>Talky.Debug</AssemblyName>
         <DebugSymbols>true</DebugSymbols>
         <DebugType>full</DebugType>
         <Optimize>false</Optimize>
@@ -28,22 +28,11 @@
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
         <PlatformTarget>AnyCPU</PlatformTarget>
-        <AssemblyName>Talky.LabAPI</AssemblyName>
+        <AssemblyName>Talky</AssemblyName>
         <DebugType>pdbonly</DebugType>
         <Optimize>true</Optimize>
         <OutputPath>bin\Release\</OutputPath>
         <DefineConstants>TRACE</DefineConstants>
-        <ErrorReport>prompt</ErrorReport>
-        <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    </PropertyGroup>
-    <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'EXILED|AnyCPU' ">
-        <PlatformTarget>AnyCPU</PlatformTarget>
-        <AssemblyName>Talky.EXILED</AssemblyName>
-        <DebugType>pdbonly</DebugType>
-        <OutputPath>bin\EXILED\</OutputPath>
-        <Optimize>true</Optimize>
-        <DefineConstants>EXILED;TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -118,7 +107,6 @@
         <Compile Include="Plugin.cs" />
         <Compile Include="Properties\AssemblyInfo.cs"/>
         <Compile Include="FakeLookHandler.cs" />
-        <Compile Include="PlayerSnapshotManager.cs" />
         <Compile Include="SpeechTracker.cs" />
         <Compile Include="SSTalkySettings.cs" />
         <Compile Include="TranslationsConfig.cs" />
