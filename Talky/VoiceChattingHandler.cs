@@ -32,16 +32,13 @@ namespace Talky
          */
         public void OnNewVoiceSending(PlayerSendingVoiceMessageEventArgs ev)
         {
-            if (ev.Player.VoiceModule is HumanVoiceModule humanVoiceModule)
+            if (ev.Message.Channel is VoiceChatChannel.Proximity or VoiceChatChannel.Radio or VoiceChatChannel.Intercom)
             {
-                if (ev.Player.RoleBase is IVoiceRole role)
+                if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
                 {
-                    if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
-                    {
-                        return;
-                    }
-                    tracker.VoiceMessageReceived(ev.Message.Data, ev.Message.DataLength);
+                    return;
                 }
+                tracker.VoiceMessageReceived(ev.Message.Data, ev.Message.DataLength);
             }
         }
 
