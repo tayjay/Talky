@@ -105,12 +105,9 @@ namespace Talky
                 player.Emotion = preset;
             } else if (setting.SettingId == enalbeTalking.SettingId)
             {
-                var player = Player.Get(hub);
-                if (setting is SSTwoButtonsSetting twoButtonsSetting)
+                if(hub.gameObject.TryGetComponent<SpeechTracker>(out var tracker))
                 {
-                    //bool enabled = twoButtonsSetting.SyncIsA;
-                    EmotionPresetType preset = GetEmotionPreset(hub);
-                    player.Emotion = preset;
+                    tracker.ShouldAnimateFace = GetEnableTalking(hub);
                 }
             }
         }

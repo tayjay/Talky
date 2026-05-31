@@ -69,7 +69,7 @@ namespace Talky
             _buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             Proxy = null;
             //hub.ServerSetEmotionPreset(DefaultPreset);
-            player.Emotion = DefaultPreset;
+            if(ShouldAnimateFace) player.Emotion = DefaultPreset;
             _samples  = new float[1024];
         }
 	
@@ -156,13 +156,13 @@ namespace Talky
                         switch (level)
                         {
                             case SpeechLevel.Silent:
-                                player.Emotion = EmotionPresetType.Neutral;
+                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Neutral;
                                 break;
                             case SpeechLevel.Quiet:
-                                player.Emotion = EmotionPresetType.Happy;
+                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Happy;
                                 break;
                             case SpeechLevel.Loud:
-                                player.Emotion = EmotionPresetType.Scared;
+                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Scared;
                                 break;
                         }
 
@@ -227,6 +227,7 @@ namespace Talky
          */
         public void OverrideEmotion(EmotionPresetType preset, int durationMs)
         {
+            if (!ShouldAnimateFace) return;
             _overridePreset = preset;
             _overrideEndTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + durationMs;
             //hub.ServerSetEmotionPreset(_overridePreset);
