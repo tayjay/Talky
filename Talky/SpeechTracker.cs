@@ -66,11 +66,11 @@ namespace Talky
             player = Player.Get(GetComponent<ReferenceHub>());
             ShouldAnimateFace = Plugin.Instance.Settings.GetEnableTalking(player.ReferenceHub);
             LastLevel = SpeechLevel.Init;
-            _buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
+            _buffer = new PlaybackBuffer(4800,endlessTapeMode:true);
             Proxy = null;
             DefaultPreset = Plugin.Instance.Settings.GetEmotionPreset(hub);
             player.Emotion = DefaultPreset;
-            _samples  = new float[1024];
+            _samples  = new float[480]; // 480 per 10ms voice packet
         }
 	
         // Update is called once per frame
@@ -117,10 +117,9 @@ namespace Talky
                 else
                 {
                     //Player is attempting to speak, need to check how loud they currently are to determine how their mouth should behave
-                    
                     float dbVolume = 20f * Mathf.Log10(CalculateRMSVolume());
                     
-                    SpeechLevel level = SpeechLevel.Silent;
+                    SpeechLevel level;
                     if ( dbVolume < Plugin.Instance.Config.LowDbThreshold)
                     {
                         level = SpeechLevel.Silent;
@@ -144,13 +143,13 @@ namespace Talky
                         switch (level)
                         {
                             case SpeechLevel.Silent:
-                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Neutral;
+                                player.Emotion = EmotionPresetType.Neutral;
                                 break;
                             case SpeechLevel.Quiet:
-                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Happy;
+                                player.Emotion = EmotionPresetType.Happy;
                                 break;
                             case SpeechLevel.Loud:
-                                if(ShouldAnimateFace) player.Emotion = EmotionPresetType.Scared;
+                                player.Emotion = EmotionPresetType.Scared;
                                 break;
                         }
                     }
@@ -158,7 +157,7 @@ namespace Talky
 
             } catch (Exception e)
             {
-                //Logger.Error(e);
+                //
             }
         }
 
@@ -187,19 +186,15 @@ namespace Talky
                 return;
             }
             
-            
             try
             {
                 int len = OpusDecoder.Decode(data, length, _samples);
                 _buffer.Write(_samples, len);
                 LastPacketTime = Time.time;
-
             } catch (Exception e)
             {
                 Logger.Debug("Error decoding voice message: " + e, Plugin.Instance.Config.Debug);
             }
-            
-            
         }
         
         /**
@@ -209,12 +204,10 @@ namespace Talky
         public void OverrideEmotion(EmotionPresetType preset, int durationMs)
         {
             OverrideEmotion(preset, durationMs / 1000f);
-
         }
         
         public void OverrideEmotion(EmotionPresetType preset, float durationSeconds)
         {
-            
             if(!ShouldAnimateFace) return;
             _overridePreset = preset;
             _overrideEndTime = Time.time + durationSeconds;
