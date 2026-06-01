@@ -26,6 +26,7 @@ public class LookOverride : MonoBehaviour
 
     public static Config TalkyConfig => Plugin.Instance.Config;
 
+    public Vector2 NextLookOffset { get; private set; }
     public Vector2 LastLookOffset { get; private set; }
 
     public float LastBusyTime { get; set; }
@@ -85,6 +86,8 @@ public class LookOverride : MonoBehaviour
             CalculateGlanceLook();
             _lastGlanceCalcTime = Time.time;
         }
+        LastLookOffset = NextLookOffset;
+        NextLookOffset = UpdateLookOffset();
     }
 
     public void CauseReact(float damage)
@@ -202,12 +205,11 @@ public class LookOverride : MonoBehaviour
         _glanceOffset = new Vector2(cappedYaw, cappedPitch) * intensity;
     }
     
-    public Vector2 GetLookOffset()
+    public Vector2 UpdateLookOffset()
     {
         Vector2 lookOffset = Vector2.zero;
         Vector2 goal = GetLookGoal();
         lookOffset = Vector2.Lerp(LastLookOffset, goal, Time.deltaTime * 7f);
-        LastLookOffset = lookOffset;
         return lookOffset;
     }
 

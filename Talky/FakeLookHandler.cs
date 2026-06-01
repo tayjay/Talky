@@ -95,6 +95,8 @@ public class FakeLookHandler
             return role;
         }
         
+        if(tracker.NextLookOffset == Vector2.zero && tracker.LastLookOffset == Vector2.zero) return role;
+        
         // RoleSyncEvent also fires from PlayerRoleManager.SendNewRoleInfo during role
         // changes, outside the WriteAll position-distribution cycle. In that path,
         // PreviouslySent isn't populated for this receiver, _lastSyncData is stale,
@@ -113,7 +115,7 @@ public class FakeLookHandler
         FirstPersonMovementModule fpmm = currentRole.FpcModule;
         // Now we need to modify the sync data
         receiverPrev[target.netId] = _lastSyncData;
-        Vector2 lookOffset = tracker.GetLookOffset();
+        Vector2 lookOffset = tracker.NextLookOffset;
         fpmm.MouseLook.CurrentHorizontal += lookOffset.x;
         fpmm.MouseLook.CurrentVertical += lookOffset.y;
         var newSyncData = FpcServerPositionDistributor.GetNewSyncData(receiver, target, fpmm, false); // Can set isInvisible to false here because it should never reach here if they are invisible.
@@ -135,29 +137,22 @@ public class FakeLookHandler
     public FpcSyncData CallPostfix(ReferenceHub receiver, ReferenceHub target, FirstPersonMovementModule fpmm, bool isInvisible,
         bool nearPositioning,FpcSyncData original)
     {
-        if (target == receiver)
-        {
-            return original; // Don't modify own player data
-        }
+        if (target == receiver) return original; // Don't modify own player data
 
         if (target.IsSpectatedBy(receiver))
         {
             if(!Plugin.Instance.Config.EnabledSpectatorHeadMovements)
                 return original;
         }
+        
+        if (target.roleManager.CurrentRole is not IFpcRole currentRole) return original;
 
         // Use cached LookOverride instead of TryGetComponent
-        if (!LookOverrideCache.TryGetValue(target.netId, out LookOverride tracker) || tracker == null)
-        {
-            return original;
-        }
-
-        if (target.roleManager.CurrentRole is not IFpcRole currentRole)
-        {
-            return original;
-        }
+        if (!LookOverrideCache.TryGetValue(target.netId, out LookOverride tracker) || tracker == null) return original;
         
-        Vector2 lookOffset = tracker.GetLookOffset();
+        if(tracker.NextLookOffset == Vector2.zero && tracker.LastLookOffset == Vector2.zero) return original;
+        
+        Vector2 lookOffset = tracker.NextLookOffset;
         fpmm.MouseLook.CurrentHorizontal += lookOffset.x;
         fpmm.MouseLook.CurrentVertical += lookOffset.y;
         var newSyncData = new FpcSyncData(_lastSyncData, original._state, original._bitCustom, original._position,
