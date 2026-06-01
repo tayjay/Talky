@@ -102,6 +102,10 @@ namespace Talky
             {
                 var player = Player.Get(hub);
                 EmotionPresetType preset = GetEmotionPreset(hub);
+                if (hub.gameObject.TryGetComponent<SpeechTracker>(out var tracker))
+                {
+                    tracker.DefaultPreset = preset;
+                }
                 player.Emotion = preset;
             } else if (setting.SettingId == enalbeTalking.SettingId)
             {

@@ -34,7 +34,7 @@ namespace Talky
         
         public OpusDecoder OpusDecoder => player.VoiceModule?.Decoder;
 
-        public EmotionPresetType DefaultPreset => Plugin.Instance.Settings.GetEmotionPreset(hub);
+        public EmotionPresetType DefaultPreset;
         
         public float LastPacketTime { get; set; }
         
@@ -68,7 +68,7 @@ namespace Talky
             LastLevel = SpeechLevel.Init;
             _buffer = new PlaybackBuffer(4096,endlessTapeMode:true);
             Proxy = null;
-            //hub.ServerSetEmotionPreset(DefaultPreset);
+            DefaultPreset = Plugin.Instance.Settings.GetEmotionPreset(hub);
             player.Emotion = DefaultPreset;
             _samples  = new float[1024];
         }
