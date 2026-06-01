@@ -27,10 +27,8 @@ public class Plugin : Plugin<Config>
         Settings.Activate();
         VoiceChattingHandler =  new VoiceChattingHandler();
         FakeLookHandler = new FakeLookHandler();
-            
         
         VoiceChattingHandler.RegisterEvents();
-        FakeLookHandler.RegisterEvents();
         ServerEvents.PluginsEnabled += OnPluginsEnabled;
     }
 
@@ -58,6 +56,7 @@ public class Plugin : Plugin<Config>
         FakeLookHandler.RequireHarmonyPatch = CheckCedMod();
         if(FakeLookHandler.RequireHarmonyPatch)
             HarmonyBridge.ApplyPatches();
+        FakeLookHandler.RegisterEvents();
     }
         
     public bool CheckCedMod()

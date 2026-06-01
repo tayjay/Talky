@@ -50,7 +50,7 @@ namespace Talky
                 {
                  return false;
                 }
-                if (player.IsHuman || player.Role==RoleTypeId.Scp3114)
+                if (player.IsHuman || player.Role==RoleTypeId.Scp3114) // || player.Role == RoleTypeId.Scp953
                 {
                     return true;
                 }

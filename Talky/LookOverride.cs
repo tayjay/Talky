@@ -137,7 +137,7 @@ public class LookOverride : MonoBehaviour
         Vector3 bestPos = default;
         float bestScore = float.MinValue;
 
-        
+        //todo: Find a way to knock this down to O(n) instead of O(n^2)
         foreach (var checkingPlayer in Player.List)
         {
             if (checkingPlayer.NetworkId == Player.NetworkId) continue;
