@@ -30,7 +30,7 @@ namespace Talky
         private float _lastUpdateTime;
 
         private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
-        private long _overrideEndTime = 0;
+        private float _overrideEndTime = 0f;
         
         public OpusDecoder OpusDecoder => player.VoiceModule?.Decoder;
 
@@ -83,7 +83,7 @@ namespace Talky
                     return;
                 _lastUpdateTime = Time.time;
 
-                if (_overrideEndTime > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                if (_overrideEndTime > Time.time)
                 {
                     //Currently in an override state, do nothing
                     return;
@@ -187,19 +187,18 @@ namespace Talky
                 return;
             }
             
-            //Timing.CallDelayed(Timing.WaitForOneFrame, () =>
-            //{ // Was experiencing voice artifacting with this
-                try
-                {
-                    int len = OpusDecoder.Decode(data, length, _samples);
-                    _buffer.Write(_samples, len);
-                    LastPacketTime = Time.time;
+            
+            try
+            {
+                int len = OpusDecoder.Decode(data, length, _samples);
+                _buffer.Write(_samples, len);
+                LastPacketTime = Time.time;
 
-                } catch (Exception e)
-                {
-                    Logger.Debug("Error decoding voice message: " + e, Plugin.Instance.Config.Debug);
-                }
-            //});
+            } catch (Exception e)
+            {
+                Logger.Debug("Error decoding voice message: " + e, Plugin.Instance.Config.Debug);
+            }
+            
             
         }
         
@@ -209,13 +208,17 @@ namespace Talky
          */
         public void OverrideEmotion(EmotionPresetType preset, int durationMs)
         {
+            OverrideEmotion(preset, durationMs / 1000f);
+
+        }
+        
+        public void OverrideEmotion(EmotionPresetType preset, float durationSeconds)
+        {
+            
             if(!ShouldAnimateFace) return;
             _overridePreset = preset;
-            _overrideEndTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + durationMs;
-            //hub.ServerSetEmotionPreset(_overridePreset);
+            _overrideEndTime = Time.time + durationSeconds;
             player.Emotion = _overridePreset;
-
-            Logger.Debug("Overriding emotion preset to " + preset + " for " + durationMs + "ms", Plugin.Instance.Config.Debug);
         }
         
         

@@ -24,7 +24,7 @@ internal static class HarmonyBridge
     {
         if (!HarmonyPresent()) return;
 
-        var harmony = new HarmonyLib.Harmony("ca.taytay.talky");
+        var harmony = new Harmony("ca.taytay.talky");
         
         // Applying a prefix and postfix to CedMod patch
         var original = AccessTools.Method("CedMod.Addons.Sentinal.Patches.FpcServerPositionDistributorPatch:GetNewSyncData",

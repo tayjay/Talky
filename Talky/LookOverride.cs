@@ -50,18 +50,6 @@ public class LookOverride : MonoBehaviour
 
     private void Update()
     {
-        
-        if (!Player.Role.IsHuman())
-        {
-            // Non-animated character model speaking, can delete self.
-#if EXILED
-                    Exiled.API.Features.Log.Debug("Removing LookOverride from non-animated model player " + Player.Nickname);
-#else
-            Logger.Debug("Removing LookOverride from non-animated model player " + Player.Nickname, Plugin.Instance.Config.Debug);
-#endif
-            Destroy(this);
-            return;
-        }
         if (Vector3.Distance(_reactOffset,Vector3.zero) > 0.05f)
         {
             _reactOffset = Vector3.Lerp(_reactOffset, Vector3.zero, Time.deltaTime*3);
@@ -81,8 +69,6 @@ public class LookOverride : MonoBehaviour
         _headBobOffset = Vector2.zero;
         if (TalkyConfig.EnableHeadBobbing)
             CalculateSpeechHeadBob();
-
-        
         
         if ((Player.RoleBase is IFpcRole role) && role.FpcModule.Motor.RotationDetected)
         {
@@ -215,10 +201,7 @@ public class LookOverride : MonoBehaviour
         // Store the offset (yaw, pitch)
         _glanceOffset = new Vector2(cappedYaw, cappedPitch) * intensity;
     }
-
-
-
-
+    
     public Vector2 GetLookOffset()
     {
         Vector2 lookOffset = Vector2.zero;
