@@ -102,6 +102,7 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Config.cs" />
+        <Compile Include="ExiledBridge.cs" />
         <Compile Include="HarmonyBridge.cs" />
         <Compile Include="LookOverride.cs" />
         <Compile Include="Plugin.cs" />

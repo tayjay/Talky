@@ -18,8 +18,7 @@ public class Plugin : Plugin<Config>
     public FakeLookHandler FakeLookHandler;
     public SSTalkySettings Settings;
     public static Plugin Instance { get; private set; }
-        
-        
+    
     public override void Enable()
     {
         Instance = this;
@@ -31,9 +30,8 @@ public class Plugin : Plugin<Config>
         VoiceChattingHandler.RegisterEvents();
         ServerEvents.PluginsEnabled += OnPluginsEnabled;
     }
-
+ 
     public override void Disable()
-
     {
         if (VoiceChattingHandler != null)
         {
@@ -45,7 +43,7 @@ public class Plugin : Plugin<Config>
             FakeLookHandler.UnregisterEvents();
             FakeLookHandler = null;
         }
-        if(FakeLookHandler.RequireHarmonyPatch)
+        if(HarmonyBridge.HarmonyPresent())
             HarmonyBridge.RemovePatches();
         Settings.Deactivate();
         Instance = null;
@@ -53,9 +51,31 @@ public class Plugin : Plugin<Config>
 
     public void OnPluginsEnabled()
     {
-        FakeLookHandler.RequireHarmonyPatch = CheckCedMod();
-        if(FakeLookHandler.RequireHarmonyPatch)
-            HarmonyBridge.ApplyPatches();
+        // Look for old Talky versions and disable them if found.
+        // Look for Talky.LabAPI
+        var plugin = PluginLoader.EnabledPlugins.FirstOrDefault(plugin => plugin.Name.Equals("Talky.LabAPI", StringComparison.OrdinalIgnoreCase));
+        if (plugin != null)
+        {
+            Logger.Warn($"{plugin.Name} was found and will be disabled to prevent conflicts. It may still be unstable. Please remove it from your LabApi plugins folder.");
+            plugin.UnregisterCommands();
+            plugin.Disable();
+            PluginLoader.EnabledPlugins.Remove(plugin);
+        }
+        
+        // Look for Talky.EXILED
+        if (ExiledBridge.ExiledPresent())
+        {
+            ExiledBridge.TryDisableLegacyTalky();
+
+            // Retry shortly after LabAPI's PluginsEnabled event just in case Exiled loads later than expected.
+            Timing.CallDelayed(0.25f, ()=>ExiledBridge.TryDisableLegacyTalky());
+        }
+        
+        // Attempt to patch CedMod regardless of if it is there or not, or if its config is configured to break our plugin.
+        // If it is not there, nothing will happen. If it is there, the patch will only do something if it is called.
+        if(HarmonyBridge.HarmonyPresent())
+            if (HarmonyBridge.ApplyPatches())
+                FakeLookHandler.RequireHarmonyPatch = CheckCedMod();
         FakeLookHandler.RegisterEvents();
     }
         
@@ -93,7 +113,7 @@ public class Plugin : Plugin<Config>
     public override string Author { get; } = "TayTay";
     public override Version Version { get; } = typeof(Plugin).Assembly.GetName().Version;
     public override string Name { get; } = "Talky";
-    public override string Description { get; } = "A plugin for LabApi that adds mouth movements while talking in-game.";
+    public override string Description { get; } = "A plugin that adds animations when players talk, react, and perform common actions.";
     public override Version RequiredApiVersion { get; } = typeof(PluginLoader).Assembly.GetName().Version;
     
     public string githubRepo = "tayjay/Talky";

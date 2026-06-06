@@ -20,9 +20,9 @@ internal static class HarmonyBridge
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void ApplyPatches()
+    public static bool ApplyPatches()
     {
-        if (!HarmonyPresent()) return;
+        if (!HarmonyPresent()) return false;
 
         var harmony = new Harmony("ca.taytay.talky");
         
@@ -30,10 +30,12 @@ internal static class HarmonyBridge
         var original = AccessTools.Method("CedMod.Addons.Sentinal.Patches.FpcServerPositionDistributorPatch:GetNewSyncData",
             [typeof(ReferenceHub), typeof(ReferenceHub), typeof(FirstPersonMovementModule), typeof(bool),typeof(bool)]);
 
-        if (original == null) return;
+        if (original == null) return false;
         
         harmony.Patch(original, new HarmonyMethod(typeof(HarmonyBridge), nameof(Prefix)),
             new HarmonyMethod(typeof(HarmonyBridge), nameof(Postfix)));
+
+        return true;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
