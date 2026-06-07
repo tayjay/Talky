@@ -21,6 +21,12 @@ public class Plugin : Plugin<Config>
     
     public override void Enable()
     {
+        var plugin = PluginLoader.EnabledPlugins.FirstOrDefault(plugin => plugin.Name.Equals("Talky", StringComparison.OrdinalIgnoreCase));
+        if (plugin != null)
+        {
+            throw new InvalidOperationException("Talky is already enabled. Please ensure only 1 Talky.dll is present between LabApi and Exiled.");
+        }
+        
         Instance = this;
         Settings = new SSTalkySettings();
         Settings.Activate();
@@ -33,6 +39,8 @@ public class Plugin : Plugin<Config>
  
     public override void Disable()
     {
+        if(HarmonyBridge.HarmonyPresent())
+            HarmonyBridge.RemovePatches();
         if (VoiceChattingHandler != null)
         {
             VoiceChattingHandler.UnregisterEvents();
@@ -43,10 +51,14 @@ public class Plugin : Plugin<Config>
             FakeLookHandler.UnregisterEvents();
             FakeLookHandler = null;
         }
-        if(HarmonyBridge.HarmonyPresent())
-            HarmonyBridge.RemovePatches();
-        Settings.Deactivate();
+        if (Settings != null)
+        {
+            Settings.Deactivate();
+            Settings = null;
+        }
+        
         Instance = null;
+        Logger.Warn("Talky was disabled.");
     }
 
     public void OnPluginsEnabled()
@@ -56,19 +68,20 @@ public class Plugin : Plugin<Config>
         var plugin = PluginLoader.EnabledPlugins.FirstOrDefault(plugin => plugin.Name.Equals("Talky.LabAPI", StringComparison.OrdinalIgnoreCase));
         if (plugin != null)
         {
-            Logger.Warn($"{plugin.Name} was found and will be disabled to prevent conflicts. It may still be unstable. Please remove it from your LabApi plugins folder.");
-            plugin.UnregisterCommands();
-            plugin.Disable();
-            PluginLoader.EnabledPlugins.Remove(plugin);
+            Logger.Warn($"{plugin.Name} was found at {plugin.FilePath}. Please remove it to allow Talky {this.Version} to run.");
+            Disable();
+            return;
         }
         
         // Look for Talky.EXILED
         if (ExiledBridge.ExiledPresent())
         {
-            ExiledBridge.TryDisableLegacyTalky();
-
-            // Retry shortly after LabAPI's PluginsEnabled event just in case Exiled loads later than expected.
-            Timing.CallDelayed(0.25f, ()=>ExiledBridge.TryDisableLegacyTalky());
+            if (ExiledBridge.TryDisableLegacyTalky())
+            {
+                Disable();
+                return;
+            }
+                
         }
         
         // Attempt to patch CedMod regardless of if it is there or not, or if its config is configured to break our plugin.

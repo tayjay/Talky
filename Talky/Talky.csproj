@@ -119,7 +119,7 @@
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
     <PropertyGroup>
-      <PostBuildEvent>xcopy /Y "E:\Projects\SCPSL\Talky\Talky\bin\Release\Talky.LabAPI.dll" "C:\Users\tayjm\AppData\Roaming\SCP Secret Laboratory\LabAPI\plugins\global"</PostBuildEvent>
+      <PostBuildEvent>xcopy /Y "E:\Projects\SCPSL\Talky\Talky\bin\Release\Talky.dll" "C:\Users\tayjm\AppData\Roaming\EXILED\Plugins"</PostBuildEvent>
     </PropertyGroup>
     <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
          Other similar extension points exist, see Microsoft.Common.targets.

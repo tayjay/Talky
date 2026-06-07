@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using Exiled.Loader;
 using LabApi.Features.Console;
 
 namespace Talky;
@@ -17,6 +16,7 @@ internal static class ExiledBridge
             assembly.GetName().Name.Equals("Exiled.Loader", StringComparison.OrdinalIgnoreCase));
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool TryDisableLegacyTalky()
     {
         if (!ExiledPresent())
@@ -36,23 +36,18 @@ internal static class ExiledBridge
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool DisableLegacyTalky()
     {
-        var plugin = Loader.Plugins.FirstOrDefault(plugin =>
-            plugin.Config.IsEnabled &&
-            (string.Equals(plugin.Name, LegacyPluginName, StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(plugin.Assembly?.GetName().Name, LegacyPluginName, StringComparison.OrdinalIgnoreCase)));
+        foreach (var plugin in Exiled.Loader.Loader.Plugins)
+        {
+            if (plugin.Config.IsEnabled &&
+                (string.Equals(plugin.Name, LegacyPluginName, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(plugin.Assembly?.GetName().Name, LegacyPluginName, StringComparison.OrdinalIgnoreCase)))
+            {
+                Logger.Warn($"{LegacyPluginName} was found in {Exiled.Loader.PathExtensions.GetPath(plugin)}. Please remove it to allow Talky {Plugin.Instance.Version} to run.");
+                return true;
+            }
+        }
 
-        if (plugin == null)
-            return false;
-
-        Logger.Warn($"{LegacyPluginName} was found and will be disabled to prevent conflicts. It may still be unstable. Please remove it from your EXILED plugins folder.");
-
-        plugin.Config.IsEnabled = false;
-        plugin.OnUnregisteringCommands();
-        plugin.OnDisabled();
-        Loader.Plugins.Remove(plugin);
-        Loader.Locations.Remove(plugin.Assembly);
-        Exiled.API.Features.Server.PluginAssemblies.Remove(plugin.Assembly);
-
-        return true;
+        return false;
+        
     }
 }
