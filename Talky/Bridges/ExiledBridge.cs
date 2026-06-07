@@ -3,7 +3,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using LabApi.Features.Console;
 
-namespace Talky;
+namespace Talky.Bridges;
 
 internal static class ExiledBridge
 {

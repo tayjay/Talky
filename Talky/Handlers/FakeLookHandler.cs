@@ -9,9 +9,10 @@ using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.NetworkMessages;
 using PlayerRoles.Spectating;
 using PlayerStatsSystem;
+using Talky.Behaviours;
 using UnityEngine;
 
-namespace Talky;
+namespace Talky.Handlers;
 
 public class FakeLookHandler
 {

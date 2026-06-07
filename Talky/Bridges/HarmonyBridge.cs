@@ -5,7 +5,7 @@ using HarmonyLib;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.NetworkMessages;
 
-namespace Talky;
+namespace Talky.Bridges;
 
 internal static class HarmonyBridge
 {

@@ -1,9 +1,10 @@
 ﻿using System;
 using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
+using Talky.Settings;
 using UnityEngine;
 
-namespace Talky;
+namespace Talky.Behaviours;
 
 public class LookOverride : MonoBehaviour
 {

@@ -1,6 +1,6 @@
 ﻿using System.ComponentModel;
 
-namespace Talky;
+namespace Talky.Settings;
 
 public class TranslationsConfig
 {

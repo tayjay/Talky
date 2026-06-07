@@ -8,6 +8,9 @@ using LabApi.Loader;
 using LabApi.Loader.Features.Paths;
 using LabApi.Loader.Features.Plugins;
 using MEC;
+using Talky.Bridges;
+using Talky.Handlers;
+using Talky.Settings;
 
 
 namespace Talky;
