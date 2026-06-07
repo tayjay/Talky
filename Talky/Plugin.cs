@@ -21,11 +21,6 @@ public class Plugin : Plugin<Config>
     
     public override void Enable()
     {
-        var plugin = PluginLoader.EnabledPlugins.FirstOrDefault(plugin => plugin.Name.Equals("Talky", StringComparison.OrdinalIgnoreCase));
-        if (plugin != null)
-        {
-            throw new InvalidOperationException("Talky is already enabled. Please ensure only 1 Talky.dll is present between LabApi and Exiled.");
-        }
         
         Instance = this;
         Settings = new SSTalkySettings();

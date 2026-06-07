@@ -128,6 +128,12 @@
       <None Include="App.config" />
       <None Include="packages.config" />
     </ItemGroup>
+    <ItemGroup>
+      <Folder Include="Behaviours\" />
+      <Folder Include="Bridges\" />
+      <Folder Include="Handlers\" />
+      <Folder Include="Settings\" />
+    </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
     <PropertyGroup>
       <PostBuildEvent>xcopy /Y $(TargetPath) "%APPDATA%\SCP Secret Laboratory\LabAPI\plugins\global"</PostBuildEvent>

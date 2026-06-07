@@ -18,7 +18,7 @@ namespace Talky
          */
         private void OnNewVoiceSending(PlayerSendingVoiceMessageEventArgs ev)
         {
-            if (ev.Message.Channel is VoiceChatChannel.Proximity or VoiceChatChannel.Radio or VoiceChatChannel.Intercom)
+            if (ev.Message.Channel is VoiceChatChannel.Proximity or VoiceChatChannel.Radio or VoiceChatChannel.Intercom or VoiceChatChannel.Scp1576)
             {
                 if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
                 {
