@@ -112,27 +112,21 @@
         </Reference>
     </ItemGroup>
     <ItemGroup>
-        <Compile Include="Config.cs" />
-        <Compile Include="ExiledBridge.cs" />
-        <Compile Include="HarmonyBridge.cs" />
-        <Compile Include="LookOverride.cs" />
+        <Compile Include="Behaviours\LookOverride.cs" />
+        <Compile Include="Behaviours\SpeechTracker.cs" />
+        <Compile Include="Bridges\ExiledBridge.cs" />
+        <Compile Include="Bridges\HarmonyBridge.cs" />
+        <Compile Include="Handlers\FakeLookHandler.cs" />
+        <Compile Include="Handlers\VoiceChattingHandler.cs" />
         <Compile Include="Plugin.cs" />
         <Compile Include="Properties\AssemblyInfo.cs"/>
-        <Compile Include="FakeLookHandler.cs" />
-        <Compile Include="SpeechTracker.cs" />
-        <Compile Include="SSTalkySettings.cs" />
-        <Compile Include="TranslationsConfig.cs" />
-        <Compile Include="VoiceChattingHandler.cs" />
+        <Compile Include="Settings\Config.cs" />
+        <Compile Include="Settings\SSTalkySettings.cs" />
+        <Compile Include="Settings\TranslationsConfig.cs" />
     </ItemGroup>
     <ItemGroup>
       <None Include="App.config" />
       <None Include="packages.config" />
-    </ItemGroup>
-    <ItemGroup>
-      <Folder Include="Behaviours\" />
-      <Folder Include="Bridges\" />
-      <Folder Include="Handlers\" />
-      <Folder Include="Settings\" />
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
     <PropertyGroup>
