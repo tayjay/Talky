@@ -26,6 +26,7 @@ This update includes performance improvements, bug fixes, and preparations for c
 - Move compatibility checks to ServerEvents.PluginsEnabled to ensure all LabApi and Exiled assemblies are loaded before checking for them.
 - Add HarmonyPresent() checks and null guards before applying/removing patches to avoid errors when Harmony is not present. Remove snapshot system and related code.
 - Enable Talking setting changes now update SpeechTracker.ShouldAnimateFace rather than resetting the player emotion.
+- Change the project build target to explicit x64 to hide build warnings.
 
 ## Fixes
 - SpeechTracker.DefaultPreset is cached on init and updated when the player setting changes.
@@ -34,3 +35,4 @@ This update includes performance improvements, bug fixes, and preparations for c
 - clean up emotion override logic
 - Emotion override timing now uses Time.time seconds instead of Unix milliseconds
 - Glance/look cleanup: removed redundant checks
+- Tidy up complaints from the linter

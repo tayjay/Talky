@@ -1,18 +1,15 @@
 ﻿using System;
 using LabApi.Features.Wrappers;
-using PlayerRoles;
 using PlayerRoles.FirstPersonControl;
 using UnityEngine;
-using Logger = LabApi.Features.Console.Logger;
-using Random = UnityEngine.Random;
 
 namespace Talky;
 
 public class LookOverride : MonoBehaviour
 {
-    public Player Player;
+    private Player _player;
 
-    public ReferenceHub Hub => Player.ReferenceHub;
+    public ReferenceHub Hub => _player.ReferenceHub;
 
     private Vector2 _headBobOffset;
     private Vector2 _glanceOffset;
@@ -24,7 +21,7 @@ public class LookOverride : MonoBehaviour
 
     //public SpeechTracker speechTracker;
 
-    public static Config TalkyConfig => Plugin.Instance.Config;
+    private static Config TalkyConfig => Plugin.Instance.Config;
 
     public Vector2 NextLookOffset { get; private set; }
     public Vector2 LastLookOffset { get; private set; }
@@ -37,7 +34,7 @@ public class LookOverride : MonoBehaviour
 
     private void Awake()
     {
-        Player = Player.Get(GetComponent<ReferenceHub>());
+        _player = Player.Get(GetComponent<ReferenceHub>());
         _headBobOffset = Vector2.zero;
         _glanceOffset = Vector2.zero;
         _reactOffset = Vector2.zero;
@@ -51,14 +48,7 @@ public class LookOverride : MonoBehaviour
 
     private void Update()
     {
-        if (Vector3.Distance(_reactOffset,Vector3.zero) > 0.05f)
-        {
-            _reactOffset = Vector3.Lerp(_reactOffset, Vector3.zero, Time.deltaTime*3);
-        }
-        else
-        {
-            _reactOffset = Vector3.zero;
-        }
+        _reactOffset = Vector3.Distance(_reactOffset,Vector3.zero) > 0.05f ? Vector3.Lerp(_reactOffset, Vector3.zero, Time.deltaTime*3) : Vector3.zero;
         if (Time.time - LastBusyTime < 0.1f)
         {
             _glanceOffset = Vector2.zero;
@@ -71,7 +61,7 @@ public class LookOverride : MonoBehaviour
         if (TalkyConfig.EnableHeadBobbing)
             CalculateSpeechHeadBob();
         
-        if ((Player.RoleBase is IFpcRole role) && role.FpcModule.Motor.RotationDetected)
+        if ((_player.RoleBase is IFpcRole role) && role.FpcModule.Motor.RotationDetected)
         {
             _glanceOffset = Vector2.zero;
             LastManualLookTime  = Time.time;
@@ -97,7 +87,7 @@ public class LookOverride : MonoBehaviour
 
     private void CalculateSpeechHeadBob()
     {
-        if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(Player.NetworkId,
+        if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(_player.NetworkId,
                 out SpeechTracker tracker)) return;
         
         if (!tracker.ShouldHeadBob)
@@ -126,8 +116,8 @@ public class LookOverride : MonoBehaviour
         float maxDistSqr = maxDistance * maxDistance;
 
         // Cache player state
-        var cam = Player.Camera;
-        Vector3 myPos = Player.Position;
+        var cam = _player.Camera;
+        Vector3 myPos = _player.Position;
         Vector3 camPos = cam.position;
         Vector3 camFwd = cam.forward;
         float currentTime = Time.time;
@@ -140,7 +130,7 @@ public class LookOverride : MonoBehaviour
         //todo: Find a way to knock this down to O(n) instead of O(n^2)
         foreach (var checkingPlayer in Player.List)
         {
-            if (checkingPlayer.NetworkId == Player.NetworkId) continue;
+            if (checkingPlayer.NetworkId == _player.NetworkId) continue;
             if (!Plugin.Instance.VoiceChattingHandler.SpeechTrackerCache.TryGetValue(checkingPlayer.NetworkId, out var tracker))
                 continue;
             Vector3 nearbyPos = checkingPlayer.Position;
@@ -204,16 +194,15 @@ public class LookOverride : MonoBehaviour
         // Store the offset (yaw, pitch)
         _glanceOffset = new Vector2(cappedYaw, cappedPitch) * intensity;
     }
-    
-    public Vector2 UpdateLookOffset()
+
+    private Vector2 UpdateLookOffset()
     {
-        Vector2 lookOffset = Vector2.zero;
         Vector2 goal = GetLookGoal();
-        lookOffset = Vector2.Lerp(LastLookOffset, goal, Time.deltaTime * 7f);
+        var lookOffset = Vector2.Lerp(LastLookOffset, goal, Time.deltaTime * 7f);
         return lookOffset;
     }
 
-    public Vector2 GetLookGoal()
+    private Vector2 GetLookGoal()
     {
         return _headBobOffset + _glanceOffset + _reactOffset;
     }

@@ -1,11 +1,9 @@
 ﻿using System;
 using LabApi.Features.Wrappers;
-using MEC;
 using PlayerRoles;
-using PlayerRoles.FirstPersonControl;
-using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using UnityEngine;
+using UnityEngine.Serialization;
 using VoiceChat.Codec;
 using VoiceChat.Networking;
 using Logger = LabApi.Features.Console.Logger;
@@ -17,28 +15,28 @@ namespace Talky
      */
     public class SpeechTracker : MonoBehaviour
     {
-        public Player player;
+        private Player _player;
 
-        public ReferenceHub hub => player.ReferenceHub;
+        private ReferenceHub Hub => _player.ReferenceHub;
         public Player Proxy { get; set; }
         
         private PlaybackBuffer _buffer;
 
         private float[] _samples;
 
-        // Throttling - 30Hz is sufficient for mouth animations
+        // Throttling - 30Hz is enough for mouth animations
         private float _lastUpdateTime;
 
         private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
-        private float _overrideEndTime = 0f;
-        
-        public OpusDecoder OpusDecoder => player.VoiceModule?.Decoder;
+        private float _overrideEndTime;
 
-        public EmotionPresetType DefaultPreset;
+        private OpusDecoder OpusDecoder => _player.VoiceModule?.Decoder;
+
+        public EmotionPresetType defaultPreset;
         
         public float LastPacketTime { get; set; }
-        
-        public SpeechLevel LastLevel { get; private set; }
+
+        private SpeechLevel LastLevel { get; set; }
         
         public float CurrentVolumeRatio { get; set; }
         
@@ -50,7 +48,7 @@ namespace Talky
                 {
                  return false;
                 }
-                if (player.IsHuman || player.Role==RoleTypeId.Scp3114) // || player.Role == RoleTypeId.Scp953
+                if (_player.IsHuman || _player.Role==RoleTypeId.Scp3114) // || player.Role == RoleTypeId.Scp953
                 {
                     return true;
                 }
@@ -62,14 +60,14 @@ namespace Talky
 
 
         // Use this for initialization
-        void Awake () {
-            player = Player.Get(GetComponent<ReferenceHub>());
-            ShouldAnimateFace = Plugin.Instance.Settings.GetEnableTalking(player.ReferenceHub);
+        private void Awake () {
+            _player = Player.Get(GetComponent<ReferenceHub>());
+            ShouldAnimateFace = Plugin.Instance.Settings.GetEnableTalking(_player?.ReferenceHub);
             LastLevel = SpeechLevel.Init;
             _buffer = new PlaybackBuffer(4800,endlessTapeMode:true);
             Proxy = null;
-            DefaultPreset = Plugin.Instance.Settings.GetEmotionPreset(hub);
-            player.Emotion = DefaultPreset;
+            defaultPreset = Plugin.Instance.Settings.GetEmotionPreset(Hub);
+            _player?.Emotion = defaultPreset;
             _samples  = new float[480]; // 480 per 10ms voice packet
         }
 	
@@ -97,7 +95,7 @@ namespace Talky
                 // Fix default preset not applying on spawn.
                 if (LastLevel == SpeechLevel.Init)
                 {
-                    if(ShouldAnimateFace) player.Emotion = DefaultPreset;
+                    if(ShouldAnimateFace) _player.Emotion = defaultPreset;
                     LastLevel = SpeechLevel.Reset;
                 }
 
@@ -108,7 +106,7 @@ namespace Talky
                     if (LastLevel != SpeechLevel.Reset)
                     {
                         //hub.ServerSetEmotionPreset(DefaultPreset);
-                        if(ShouldAnimateFace) player.Emotion = DefaultPreset;
+                        if(ShouldAnimateFace) _player.Emotion = defaultPreset;
                         LastLevel = SpeechLevel.Reset;
                         CurrentVolumeRatio = 0;
                     }
@@ -117,7 +115,7 @@ namespace Talky
                 else
                 {
                     //Player is attempting to speak, need to check how loud they currently are to determine how their mouth should behave
-                    float dbVolume = 20f * Mathf.Log10(CalculateRMSVolume());
+                    float dbVolume = 20f * Mathf.Log10(CalculateRmsVolume());
                     
                     SpeechLevel level;
                     if ( dbVolume < Plugin.Instance.Config.LowDbThreshold)
@@ -143,13 +141,13 @@ namespace Talky
                         switch (level)
                         {
                             case SpeechLevel.Silent:
-                                player.Emotion = EmotionPresetType.Neutral;
+                                _player.Emotion = EmotionPresetType.Neutral;
                                 break;
                             case SpeechLevel.Quiet:
-                                player.Emotion = EmotionPresetType.Happy;
+                                _player.Emotion = EmotionPresetType.Happy;
                                 break;
                             case SpeechLevel.Loud:
-                                player.Emotion = EmotionPresetType.Scared;
+                                _player.Emotion = EmotionPresetType.Scared;
                                 break;
                         }
                     }
@@ -157,11 +155,11 @@ namespace Talky
 
             } catch (Exception e)
             {
-                //
+                Logger.Debug(e, Plugin.Instance.Config.Debug);
             }
         }
 
-        public float CalculateRMSVolume()
+        private float CalculateRmsVolume()
         {
             float sumOfSquares = 0f;
             foreach(float sample in _buffer.Buffer)
@@ -211,11 +209,11 @@ namespace Talky
             if(!ShouldAnimateFace) return;
             _overridePreset = preset;
             _overrideEndTime = Time.time + durationSeconds;
-            player.Emotion = _overridePreset;
+            _player.Emotion = _overridePreset;
         }
-        
-        
-        public enum SpeechLevel
+
+
+        private enum SpeechLevel
         {
             Init = -2,
             Reset = -1,

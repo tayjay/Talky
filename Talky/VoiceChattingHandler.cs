@@ -1,24 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using GameCore;
 using LabApi.Events.Arguments.PlayerEvents;
-using LabApi.Events.Arguments.ServerEvents;
-using LabApi.Features.Console;
-using LabApi.Features.Enums;
-using LabApi.Features.Wrappers;
 using MEC;
-using Mirror;
-using PlayerRoles;
-using PlayerRoles.FirstPersonControl;
-using PlayerRoles.FirstPersonControl.NetworkMessages;
-using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
-using PlayerRoles.PlayableScps.Scp3114;
-using PlayerRoles.Voice;
 using PlayerStatsSystem;
 using VoiceChat;
-using VoiceChat.Codec;
 
 namespace Talky
 {
@@ -30,7 +16,7 @@ namespace Talky
         /**
          * When the player talks and sends a voice message to the server.
          */
-        public void OnNewVoiceSending(PlayerSendingVoiceMessageEventArgs ev)
+        private void OnNewVoiceSending(PlayerSendingVoiceMessageEventArgs ev)
         {
             if (ev.Message.Channel is VoiceChatChannel.Proximity or VoiceChatChannel.Radio or VoiceChatChannel.Intercom)
             {
@@ -45,7 +31,7 @@ namespace Talky
         /**
          * When the player is hurt.
          */
-        public void OnHurt(PlayerHurtEventArgs ev)
+        private void OnHurt(PlayerHurtEventArgs ev)
         {
             if(!Plugin.Instance.Config.EnableReactionOnHurt) return;
             if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
@@ -68,7 +54,7 @@ namespace Talky
         /**
          * When the player spawns, add the SpeechTracker component if it doesn't already exist.
          */
-        public void OnSpawn(PlayerSpawnedEventArgs ev)
+        private void OnSpawn(PlayerSpawnedEventArgs ev)
         {
             var hub = ev.Player.ReferenceHub;
             if (!hub.TryGetComponent(out SpeechTracker tracker))
@@ -76,17 +62,17 @@ namespace Talky
                 tracker = hub.gameObject.AddComponent<SpeechTracker>();
             }
             SpeechTrackerCache[hub.netId] = tracker;
-            tracker.OverrideEmotion(tracker.DefaultPreset,100);
+            tracker.OverrideEmotion(tracker.defaultPreset,100);
         }
 
         /**
          * When the player uses an item (Medkit, SCP207, etc.), make them emote accordingly.
          */
-        public void OnUsingItem(PlayerUsingItemEventArgs ev)
+        private void OnUsingItem(PlayerUsingItemEventArgs ev)
         {
             if(!Plugin.Instance.Config.EnableEmoteOnConsumables) return;
-            float waitTime = 0;
-            int openTime = 0;
+            float waitTime;
+            int openTime;
             switch (ev.UsableItem.Type)
             {
                 case ItemType.Adrenaline:
@@ -135,12 +121,12 @@ namespace Talky
         }
 
 
-        public void OnRoundRestart()
+        private void OnRoundRestart()
         {
             SpeechTrackerCache.Clear();
         }
-        
-        public void OnPlayerLeft(PlayerLeftEventArgs ev)
+
+        private void OnPlayerLeft(PlayerLeftEventArgs ev)
         {
             SpeechTrackerCache.Remove(ev.Player.ReferenceHub.netId);
         }

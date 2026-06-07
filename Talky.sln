@@ -4,16 +4,16 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talky", "Talky\Talky.csproj
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
-		Debug|Any CPU = Debug|Any CPU
-		Release|Any CPU = Release|Any CPU
-		EXILED|Any CPU = EXILED|Any CPU
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+		EXILED|x64 = EXILED|x64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Release|Any CPU.Build.0 = Release|Any CPU
-		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.EXILED|Any CPU.ActiveCfg = EXILED|Any CPU
-		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.EXILED|Any CPU.Build.0 = EXILED|Any CPU
+		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Debug|x64.ActiveCfg = Debug|x64
+		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Debug|x64.Build.0 = Debug|x64
+		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Release|x64.ActiveCfg = Release|x64
+		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.Release|x64.Build.0 = Release|x64
+		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.EXILED|x64.ActiveCfg = EXILED|x64
+		{2E2D2E00-82AF-4B6B-820C-4803490F47DE}.EXILED|x64.Build.0 = EXILED|x64
 	EndGlobalSection
 EndGlobal
