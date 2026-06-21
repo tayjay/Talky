@@ -43,6 +43,13 @@ public sealed class TalkyExiledPlugin : Plugin<TalkyExiledConfig>
         base.OnDisabled();
     }
 
+    public override void OnReloaded()
+    {
+        OnDisabled();
+        OnEnabled();
+        base.OnReloaded();
+    }
+
     public override void OnRegisteringCommands()
     {
         // No-op: Talky registers no EXILED commands, and we don't want the base scanning this assembly.
