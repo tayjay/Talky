@@ -53,43 +53,43 @@
           <HintPath>C:\Users\tayjm\AppData\Roaming\EXILED\Plugins\dependencies\0Harmony.dll</HintPath>
         </Reference>
         <Reference Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Assembly-CSharp-Publicized.dll</HintPath>
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Assembly-CSharp-Publicized.dll</HintPath>
         </Reference>
         <Reference Include="Assembly-CSharp-firstpass">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
         </Reference>
         <Reference Include="CommandSystem.Core, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\CommandSystem.Core.dll</HintPath>
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\CommandSystem.Core.dll</HintPath>
         </Reference>
-        <Reference Include="Exiled.API, Version=9.14.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Exiled.API.dll</HintPath>
+        <Reference Include="Exiled.API, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.API.dll</HintPath>
         </Reference>
-        <Reference Include="Exiled.CreditTags, Version=9.14.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Exiled.CreditTags.dll</HintPath>
+        <Reference Include="Exiled.CreditTags, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.CreditTags.dll</HintPath>
         </Reference>
-        <Reference Include="Exiled.CustomItems, Version=9.14.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Exiled.CustomItems.dll</HintPath>
+        <Reference Include="Exiled.CustomItems, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.CustomItems.dll</HintPath>
         </Reference>
-        <Reference Include="Exiled.CustomRoles, Version=9.14.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Exiled.CustomRoles.dll</HintPath>
+        <Reference Include="Exiled.CustomRoles, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.CustomRoles.dll</HintPath>
         </Reference>
-        <Reference Include="Exiled.Events, Version=9.14.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Exiled.Events.dll</HintPath>
+        <Reference Include="Exiled.Events, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.Events.dll</HintPath>
         </Reference>
-        <Reference Include="Exiled.Loader, Version=9.14.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Exiled.Loader.dll</HintPath>
+        <Reference Include="Exiled.Loader, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.Loader.dll</HintPath>
         </Reference>
-        <Reference Include="Exiled.Permissions, Version=9.14.1.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\Exiled.Permissions.dll</HintPath>
+        <Reference Include="Exiled.Permissions, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.Permissions.dll</HintPath>
         </Reference>
         <Reference Include="LabApi, Version=1.1.7.0, Culture=neutral, processorArchitecture=Amd64">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\LabApi.dll</HintPath>
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\LabApi.dll</HintPath>
         </Reference>
         <Reference Include="Mirror">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Mirror.dll</HintPath>
         </Reference>
         <Reference Include="NorthwoodLib, Version=1.4.0.0, Culture=neutral, processorArchitecture=MSIL">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\NorthwoodLib.dll</HintPath>
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\NorthwoodLib.dll</HintPath>
         </Reference>
         <Reference Include="Pooling">
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Pooling.dll</HintPath>
@@ -108,25 +108,54 @@
           <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
         </Reference>
         <Reference Include="YamlDotNet, Version=11.0.0.0, Culture=neutral, PublicKeyToken=ec19458f3c15af5e, processorArchitecture=MSIL">
-          <HintPath>..\packages\ExMod.Exiled.9.14.1\lib\net48\YamlDotNet.dll</HintPath>
+          <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\YamlDotNet.dll</HintPath>
         </Reference>
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Behaviours\LookOverride.cs" />
         <Compile Include="Behaviours\SpeechTracker.cs" />
         <Compile Include="Bridges\ExiledBridge.cs" />
+        <Compile Include="Bridges\ExiledRegistration.cs" />
         <Compile Include="Bridges\HarmonyBridge.cs" />
         <Compile Include="Handlers\FakeLookHandler.cs" />
         <Compile Include="Handlers\VoiceChattingHandler.cs" />
         <Compile Include="Plugin.cs" />
         <Compile Include="Properties\AssemblyInfo.cs"/>
-        <Compile Include="Settings\Config.cs" />
         <Compile Include="Settings\SSTalkySettings.cs" />
-        <Compile Include="Settings\TranslationsConfig.cs" />
     </ItemGroup>
     <ItemGroup>
       <None Include="App.config" />
       <None Include="packages.config" />
+    </ItemGroup>
+    <ItemGroup>
+      <!-- Talky.Core holds Config (referenced throughout) + TalkyBridge. Compile reference only;
+           it is embedded below rather than shipped loose. -->
+      <ProjectReference Include="..\Talky.Core\Talky.Core.csproj">
+        <Project>{A1B2C3D4-0001-4000-8000-000000000001}</Project>
+        <Name>Talky.Core</Name>
+        <Private>false</Private>
+      </ProjectReference>
+      <!-- The EXILED shim. Build-order dependency only (no compile reference); loaded by reflection
+           from its embedded resource at runtime, so this assembly never names an EXILED type. -->
+      <ProjectReference Include="..\Talky.Exiled\Talky.Exiled.csproj">
+        <Project>{A1B2C3D4-0002-4000-8000-000000000002}</Project>
+        <Name>Talky.Exiled</Name>
+        <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+        <Private>false</Private>
+      </ProjectReference>
+    </ItemGroup>
+    <ItemGroup>
+      <!-- Embedded single-file payload. Talky.Core.dll keeps its ".dll" resource name so LabAPI and
+           EXILED auto-extract and load it as a dependency before they scan types; the shim uses a
+           ".bin" name so the auto-extractors ignore it and only ExiledRegistration loads it. -->
+      <EmbeddedResource Include="..\Talky.Core\bin\Talky.Core.dll">
+        <LogicalName>Talky.Core.dll</LogicalName>
+        <Visible>false</Visible>
+      </EmbeddedResource>
+      <EmbeddedResource Include="..\Talky.Exiled\bin\Talky.Exiled.dll">
+        <LogicalName>Talky.Exiled.dll.bin</LogicalName>
+        <Visible>false</Visible>
+      </EmbeddedResource>
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
     <PropertyGroup>

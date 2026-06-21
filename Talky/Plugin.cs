@@ -1,14 +1,14 @@
 ﻿using System;
-using System.IO;
+using System.Data;
 using System.Linq;
+using System.Reflection;
 using LabApi.Events.Handlers;
-using LabApi.Features;
 using LabApi.Features.Console;
 using LabApi.Loader;
-using LabApi.Loader.Features.Paths;
 using LabApi.Loader.Features.Plugins;
 using MEC;
 using Talky.Bridges;
+using Talky.Core;
 using Talky.Handlers;
 using Talky.Settings;
 
@@ -21,19 +21,54 @@ public class Plugin : Plugin<Config>
     public FakeLookHandler FakeLookHandler;
     public SSTalkySettings Settings;
     public static Plugin Instance { get; private set; }
+
+    // Set by the EXILED native path (TalkyBridge.Enable) before Enable() runs, so Enable() runs
+    // post-load setup directly instead of subscribing to LabAPI's ServerEvents.PluginsEnabled,
+    // which has already fired by the time EXILED enables the embedded native plugin.
+    internal bool ExiledNativeMode;
+
+    public Plugin()
+    {
+        if(AppDomain.CurrentDomain.GetAssemblies().Any(assembly => assembly.GetName().Name.StartsWith("Talky.LabAPI") || assembly.GetName().Name.StartsWith("Talky.EXILED")))
+            throw new DuplicateNameException("Multiple Talky plugin assemblies detected. Please remove legacy versions of Talky to use this.");
+        Instance = this;
+        WireExiledBridge();
+        ExiledRegistration.TryRegisterNativePlugin();
+    }
+
+    // Wires identity + lifecycle for the embedded EXILED shim (Talky.Exiled.dll). The shim reads
+    // these through TalkyBridge so it needs no compile-time reference back to this assembly.
+    // Harmless on LabAPI-only servers, where the shim is never loaded.
+    private void WireExiledBridge()
+    {
+        TalkyBridge.Name = Name;
+        TalkyBridge.Prefix = Name.ToLower();
+        TalkyBridge.Author = Author;
+        TalkyBridge. Version = Version;
+        TalkyBridge.Enable = cfg =>
+        {
+            if (cfg != null) Config = cfg;   // adopt EXILED's loaded config
+            ExiledNativeMode = true;
+            Enable();
+        };
+        TalkyBridge.Disable = Disable;
+    }
     
     public override void Enable()
     {
-        
-        Instance = this;
         Settings = new SSTalkySettings();
         Settings.Activate();
         VoiceChattingHandler =  new VoiceChattingHandler();
         FakeLookHandler = new FakeLookHandler();
         
         VoiceChattingHandler.RegisterEvents();
-        ServerEvents.PluginsEnabled += OnPluginsEnabled;
+        if (ExiledNativeMode)
+            OnPluginsEnabled();                       // native path: LabAPI's PluginsEnabled already fired
+        else
+            ServerEvents.PluginsEnabled += OnPluginsEnabled;
+        Logger.Warn("Talky was enabled.");
     }
+    
  
     public override void Disable()
     {
@@ -54,40 +89,22 @@ public class Plugin : Plugin<Config>
             Settings.Deactivate();
             Settings = null;
         }
-        
-        Instance = null;
         Logger.Warn("Talky was disabled.");
     }
 
     public void OnPluginsEnabled()
     {
-        // Look for old Talky versions and disable them if found.
-        // Look for Talky.LabAPI
-        var plugin = PluginLoader.EnabledPlugins.FirstOrDefault(plugin => plugin.Name.Equals("Talky.LabAPI", StringComparison.OrdinalIgnoreCase));
-        if (plugin != null)
+        Timing.CallDelayed(Timing.WaitForSeconds(0.1f), () =>
         {
-            Logger.Warn($"{plugin.Name} was found at {plugin.FilePath}. Please remove it to allow Talky {this.Version} to run.");
-            Disable();
-            return;
-        }
-        
-        // Look for Talky.EXILED
-        if (ExiledBridge.ExiledPresent())
-        {
-            if (ExiledBridge.TryDisableLegacyTalky())
-            {
-                Disable();
-                return;
-            }
-                
-        }
-        
-        // Attempt to patch CedMod regardless of if it is there or not, or if its config is configured to break our plugin.
-        // If it is not there, nothing will happen. If it is there, the patch will only do something if it is called.
-        if(HarmonyBridge.HarmonyPresent())
-            if (HarmonyBridge.ApplyPatches())
-                FakeLookHandler.RequireHarmonyPatch = CheckCedMod();
-        FakeLookHandler.RegisterEvents();
+            // Attempt to patch CedMod regardless of if it is there or not, or if its config is configured to break our plugin.
+            // If it is not there, nothing will happen. If it is there, the patch will only do something if it is called.
+            if (HarmonyBridge.HarmonyPresent())
+                if (HarmonyBridge.ApplyPatches())
+                    FakeLookHandler.RequireHarmonyPatch = CheckCedMod();
+            FakeLookHandler.RegisterEvents();
+
+            Logger.Debug("Talky was fully enabled.", Config.Debug);
+        });
     }
         
     public bool CheckCedMod()
@@ -125,7 +142,7 @@ public class Plugin : Plugin<Config>
     public override Version Version { get; } = typeof(Plugin).Assembly.GetName().Version;
     public override string Name { get; } = "Talky";
     public override string Description { get; } = "A plugin that adds animations when players talk, react, and perform common actions.";
-    public override Version RequiredApiVersion { get; } = typeof(PluginLoader).Assembly.GetName().Version;
+    public override Version RequiredApiVersion { get; } = new Version(1, 1, 7, 0);
     
     public string githubRepo = "tayjay/Talky";
         

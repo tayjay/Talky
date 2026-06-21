@@ -1,10 +1,10 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 
 namespace Talky.Settings;
 
 public class TranslationsConfig
 {
-    
+
     [Description("Header for Talky settings in the server-specific settings menu.")]
     public string SSGroupLabel { get; set; } = "Talky Settings";
     [Description("Label for the Animate - Grab keybind setting.")]
@@ -20,7 +20,7 @@ public class TranslationsConfig
 
     [Description("Hint for the Enable Talking toggle setting.")]
     public string SSEnableTalkingHint { get; set; } = "Whether to animate your face while talking.";
-    
+
     [Description("Emotion preset options. Changing these will change the options in the Default Emotion dropdown setting.")]
     public string Neutral { get; set; } = "Neutral";
     public string Happy { get; set; } = "Happy";
@@ -29,7 +29,7 @@ public class TranslationsConfig
     public string Angry { get; set; } = "Angry";
     public string Chad { get; set; } = "Chad";
     public string Ogre { get; set; } = "Ogre";
-    
+
     public string SSEnabled { get; set; } = "Enabled";
     public string SSDisabled { get; set; } = "Disabled";
 }
