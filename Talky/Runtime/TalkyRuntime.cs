@@ -54,7 +54,7 @@ public sealed class TalkyRuntime : IDisposable
         _effectivePerformancePolicy = EffectivePerformancePolicy.Create(
             config,
             Plugin.Instance?.PerformanceMonitor?.Tier ?? PerformanceTier.Full);
-        _policy = ToRuntimePolicy(_effectivePerformancePolicy);
+        _policy = TalkyRuntimePolicy.FromEffective(_effectivePerformancePolicy);
     }
 
     public bool IsEnabled => _enabled;
@@ -140,7 +140,7 @@ public sealed class TalkyRuntime : IDisposable
             return;
 
         _effectivePerformancePolicy = policy;
-        ApplyPolicy(ToRuntimePolicy(policy));
+        ApplyPolicy(TalkyRuntimePolicy.FromEffective(policy));
     }
 
     public void RegisterPlayer(Player player)
@@ -777,17 +777,6 @@ public sealed class TalkyRuntime : IDisposable
     private static float NextDeadline(float now, float interval)
     {
         return interval <= 0f ? now : now + interval;
-    }
-
-    private static TalkyRuntimePolicy ToRuntimePolicy(EffectivePerformancePolicy policy)
-    {
-        return new TalkyRuntimePolicy(
-            policy.FaceIntervalSeconds,
-            policy.LookIntervalSeconds,
-            policy.GlanceIntervalSeconds,
-            policy.HeadMovementEnabled,
-            policy.HeadBobbingEnabled,
-            policy.GlancingEnabled);
     }
 
     private static double MonotonicSeconds()

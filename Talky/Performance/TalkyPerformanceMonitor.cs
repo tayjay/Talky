@@ -8,21 +8,25 @@ namespace Talky.Performance;
 /// <summary>
 /// Production adapter around the allocation-conscious core profiler and adaptive governor.
 /// All hot-path methods avoid formatting, LINQ, closures, and per-call object creation.
+///
+/// Callback/frame samples -> profiler window -> governor decision -> cached runtime policy.
+/// Completed windows also feed one reusable periodic-summary accumulator.
 /// </summary>
 public sealed class TalkyPerformanceMonitor : IDisposable
 {
-    public const int VoiceSampleEvery = 8;
-    public const int SyncSampleEvery = 64;
+    public const int VoiceSampleEvery = PerformanceMetricCatalog.VoiceSampleEvery;
+    public const int SyncSampleEvery = PerformanceMetricCatalog.SyncSampleEvery;
 
     private const int HistorySeconds = 60;
-    private const double DefaultSummarySeconds = 300d;
+    private const double SummaryFallbackSeconds = 300d;
+    private const double FloorWarningIntervalSeconds = 300d;
 
     private Config _config;
     private PerformanceProfiler _profiler;
     private AdaptivePerformanceGovernor _governor;
     private EffectivePerformancePolicy _currentPolicy;
-    private readonly FrameHistogramAccumulator _summaryFrameHistogram =
-        new FrameHistogramAccumulator();
+    private readonly PerformanceSummaryAccumulator _summary =
+        new PerformanceSummaryAccumulator();
 
     private double _lastNowSeconds;
     private bool _hasTimeOrigin;
@@ -33,33 +37,6 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     private bool _disposed;
     private bool _failureLogged;
 
-    // Five-minute aggregate. It contains counts only; no player identity enters the monitor.
-    private double _summaryStartedAt;
-    private double _summaryDurationSeconds;
-    private double _summaryTalkyMilliseconds;
-    private double _summaryWorstP95Milliseconds;
-    private double _summaryVoiceMilliseconds;
-    private double _summaryFaceMilliseconds;
-    private double _summaryLookMilliseconds;
-    private double _summarySchedulerMilliseconds;
-    private double _summarySyncMilliseconds;
-    private double _summaryProfilerMilliseconds;
-    private double _summarySmoothDeltaMilliseconds;
-    private double _summaryTargetTickrate;
-    private long _summaryFrames;
-    private long _summaryWindows;
-    private long _summarySmoothSamples;
-    private long _summaryVoicePackets;
-    private long _summaryDecodedSamples;
-    private long _summaryGlanceCandidates;
-    private long _summarySyncEntries;
-    private long _summaryActiveTargetHits;
-    private long _summaryRewrites;
-    private long _summaryEmotionWrites;
-    private long _summaryPopulationSamples;
-    private long _summaryPlayers;
-    private long _summaryRecentSpeakers;
-    private long _summaryActiveLooks;
     private double _lastFloorWarningAt = double.NegativeInfinity;
     private double _latestSmoothDeltaMilliseconds;
     private int _latestServerTickrate;
@@ -86,10 +63,10 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _profiler = CreateProfiler(config);
         _governor = new AdaptivePerformanceGovernor(config.Performance, _lastNowSeconds);
         _profilingEnabled = _governor.Settings.Mode != PerformanceMode.Disabled;
-        _currentPolicy = EffectivePerformancePolicy.Create(config, _governor.CurrentTier);
+        RefreshCurrentPolicy();
         _lastTransitionReason = InitialReason(_governor.Settings);
         ResetWindowGate();
-        ResetSummary(_lastNowSeconds);
+        _summary.Reset(_lastNowSeconds);
     }
 
     /// <summary>
@@ -113,7 +90,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             return -1L;
 
         if (sampleEvery <= 0)
-            sampleEvery = DefaultSampleEvery(metric);
+            sampleEvery = PerformanceMetricCatalog.DefaultSampleEvery(metric);
 
         return _profiler.BeginSample(metric, sampleEvery);
     }
@@ -172,111 +149,28 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         try
         {
-            bool validFrame = IsFinite(deltaMilliseconds) && deltaMilliseconds >= 0d;
-            if (!validFrame)
+            if (!RecordFrame(
+                    deltaMilliseconds,
+                    smoothDeltaMilliseconds,
+                    serverTickrate,
+                    idle,
+                    roundActive,
+                    players,
+                    recentSpeakers,
+                    activeLooks))
             {
-                FreezeAfterFailure("invalid raw frame sample");
                 return;
-            }
-
-            bool validSmooth =
-                IsFinite(smoothDeltaMilliseconds) && smoothDeltaMilliseconds > 0d;
-            if (validSmooth)
-                _latestSmoothDeltaMilliseconds = smoothDeltaMilliseconds;
-            if (serverTickrate > 0)
-                _latestServerTickrate = serverTickrate;
-
-            bool healthEligible = validFrame && !idle && roundActive && players > 0;
-
-            _profiler.Increment(PerformanceCounter.TrackedPlayers, NonNegative(players));
-            _profiler.Increment(
-                PerformanceCounter.RecentSpeakers,
-                NonNegative(recentSpeakers));
-            _profiler.Increment(
-                PerformanceCounter.ActiveLookTargets,
-                NonNegative(activeLooks));
-
-            if (validFrame)
-            {
-                _profiler.RecordFrameMilliseconds(deltaMilliseconds);
-                if (!_windowHasFrames)
-                {
-                    _windowHasFrames = true;
-                    _windowHealthEligible = healthEligible;
-                }
-                else
-                {
-                    // A window which overlaps idle/startup/round transition is never used as
-                    // server-health evidence after the server becomes active again.
-                    _windowHealthEligible &= healthEligible;
-                }
-            }
-
-            if (healthEligible)
-            {
-                _summaryPopulationSamples++;
-                _summaryPlayers += NonNegative(players);
-                _summaryRecentSpeakers += NonNegative(recentSpeakers);
-                _summaryActiveLooks += NonNegative(activeLooks);
-                if (validSmooth && serverTickrate > 0)
-                {
-                    _summarySmoothSamples++;
-                    _summarySmoothDeltaMilliseconds += smoothDeltaMilliseconds;
-                    _summaryTargetTickrate += serverTickrate;
-                }
             }
 
             if (!_profiler.TryCloseWindow(Stopwatch.GetTimestamp(), out PerformanceWindow window))
                 return;
 
-            bool profilingValid =
-                window != null &&
-                window.DurationSeconds > 0d &&
-                window.FrameCount > 0L &&
-                IsFinite(window.TalkyMillisecondsPerFrame) &&
-                IsFinite(window.FrameP95Milliseconds);
-
-            bool serverHealthEligible = profilingValid && _windowHasFrames && _windowHealthEligible;
-            ResetWindowGate();
-
-            if (!profilingValid)
-            {
-                FreezeAfterFailure("invalid completed profiler window");
-                return;
-            }
-
-            GovernorSample sample = new GovernorSample(
-                window.TalkyMillisecondsPerFrame,
-                window.FrameP95Milliseconds,
-                serverHealthEligible,
-                true);
-
-            long governorStarted = Stopwatch.GetTimestamp();
-            GovernorDecision decision = _governor.Evaluate(sample, _lastNowSeconds);
-            governorTicks = Stopwatch.GetTimestamp() - governorStarted;
-            if (governorTicks > 0L)
-                _profiler.RecordDurationTicks(PerformanceMetric.Governor, governorTicks);
-
-            if (decision.Changed)
-            {
-                _currentPolicy = EffectivePerformancePolicy.Create(_config, decision.CurrentTier);
-                _lastTransitionReason = decision.Reason;
-                LogTransition(decision, window, players, recentSpeakers, activeLooks);
-            }
-            else if (decision.PressureAtFloor &&
-                     _lastNowSeconds - _lastFloorWarningAt >= DefaultSummarySeconds)
-            {
-                _lastFloorWarningAt = _lastNowSeconds;
-                Logger.Warn(
-                    $"Performance pressure remains at the facial-animation floor " +
-                    $"({PressureSource(window, serverHealthEligible)}): " +
-                    $"talky={window.TalkyMillisecondsPerFrame:F3} ms/frame, " +
-                    $"server_p95={window.FrameP95Milliseconds:F2} ms. " +
-                    "Voice-driven facial animation remains enabled.");
-            }
-
-            Aggregate(window);
-            TryLogSummary(_lastNowSeconds);
+            EvaluateWindow(
+                window,
+                players,
+                recentSpeakers,
+                activeLooks,
+                ref governorTicks);
         }
         catch (Exception exception)
         {
@@ -293,6 +187,130 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         }
     }
 
+    private bool RecordFrame(
+        double deltaMilliseconds,
+        double smoothDeltaMilliseconds,
+        int serverTickrate,
+        bool idle,
+        bool roundActive,
+        int players,
+        int recentSpeakers,
+        int activeLooks)
+    {
+        if (!IsFinite(deltaMilliseconds) || deltaMilliseconds < 0d)
+        {
+            FreezeAfterFailure("invalid raw frame sample");
+            return false;
+        }
+
+        bool validSmooth =
+            IsFinite(smoothDeltaMilliseconds) && smoothDeltaMilliseconds > 0d;
+        if (validSmooth)
+            _latestSmoothDeltaMilliseconds = smoothDeltaMilliseconds;
+        if (serverTickrate > 0)
+            _latestServerTickrate = serverTickrate;
+
+        bool healthEligible = !idle && roundActive && players > 0;
+
+        _profiler.Increment(PerformanceCounter.TrackedPlayers, NonNegative(players));
+        _profiler.Increment(
+            PerformanceCounter.RecentSpeakers,
+            NonNegative(recentSpeakers));
+        _profiler.Increment(
+            PerformanceCounter.ActiveLookTargets,
+            NonNegative(activeLooks));
+        _profiler.RecordFrameMilliseconds(deltaMilliseconds);
+
+        if (!_windowHasFrames)
+        {
+            _windowHasFrames = true;
+            _windowHealthEligible = healthEligible;
+        }
+        else
+        {
+            // A window which overlaps idle/startup/round transition is never used as
+            // server-health evidence after the server becomes active again.
+            _windowHealthEligible &= healthEligible;
+        }
+
+        if (healthEligible)
+        {
+            _summary.RecordEligibleFrame(
+                players,
+                recentSpeakers,
+                activeLooks,
+                smoothDeltaMilliseconds,
+                serverTickrate,
+                validSmooth && serverTickrate > 0);
+        }
+
+        return true;
+    }
+
+    private void EvaluateWindow(
+        PerformanceWindow window,
+        int players,
+        int recentSpeakers,
+        int activeLooks,
+        ref long governorTicks)
+    {
+        bool profilingValid =
+            window != null &&
+            window.DurationSeconds > 0d &&
+            window.FrameCount > 0L &&
+            IsFinite(window.TalkyMillisecondsPerFrame) &&
+            IsFinite(window.FrameP95Milliseconds);
+
+        bool serverHealthEligible = profilingValid && _windowHasFrames && _windowHealthEligible;
+        ResetWindowGate();
+
+        if (!profilingValid)
+        {
+            FreezeAfterFailure("invalid completed profiler window");
+            return;
+        }
+
+        GovernorSample sample = new GovernorSample(
+            window.TalkyMillisecondsPerFrame,
+            window.FrameP95Milliseconds,
+            serverHealthEligible,
+            true);
+
+        long governorStarted = Stopwatch.GetTimestamp();
+        GovernorDecision decision = _governor.Evaluate(sample, _lastNowSeconds);
+        governorTicks = Stopwatch.GetTimestamp() - governorStarted;
+        if (governorTicks > 0L)
+            _profiler.RecordDurationTicks(PerformanceMetric.Governor, governorTicks);
+
+        PerformanceBreakdown breakdown = PerformanceBreakdown.FromWindow(window);
+        if (decision.Changed)
+        {
+            RefreshCurrentPolicy();
+            _lastTransitionReason = decision.Reason;
+            LogTransition(
+                decision,
+                window,
+                breakdown,
+                players,
+                recentSpeakers,
+                activeLooks);
+        }
+        else if (decision.PressureAtFloor &&
+                 _lastNowSeconds - _lastFloorWarningAt >= FloorWarningIntervalSeconds)
+        {
+            _lastFloorWarningAt = _lastNowSeconds;
+            Logger.Warn(
+                $"Performance pressure remains at the facial-animation floor " +
+                $"({PressureSource(window, serverHealthEligible)}): " +
+                $"talky={window.TalkyMillisecondsPerFrame:F3} ms/frame, " +
+                $"server_p95={window.FrameP95Milliseconds:F2} ms. " +
+                "Voice-driven facial animation remains enabled.");
+        }
+
+        _summary.AddWindow(window, breakdown);
+        TryLogSummary(_lastNowSeconds);
+    }
+
     public void Reconfigure(Config config)
     {
         if (config == null)
@@ -305,7 +323,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _failureLogged = false;
         _governor.Reconfigure(config.Performance, _lastNowSeconds);
         _profilingEnabled = _governor.Settings.Mode != PerformanceMode.Disabled;
-        _currentPolicy = EffectivePerformancePolicy.Create(config, _governor.CurrentTier);
+        RefreshCurrentPolicy();
         _lastTransitionReason = InitialReason(_governor.Settings);
 
         // Configuration reload is a cold path. Reset in place when dimensions are unchanged;
@@ -316,7 +334,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         else
             _profiler = new PerformanceProfiler(windowSeconds, HistorySeconds);
         ResetWindowGate();
-        ResetSummary(_lastNowSeconds);
+        _summary.Reset(_lastNowSeconds);
     }
 
     /// <summary>
@@ -328,10 +346,10 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             return;
 
         _governor.ResetForRound(_lastNowSeconds);
-        _currentPolicy = EffectivePerformancePolicy.Create(_config, _governor.CurrentTier);
+        RefreshCurrentPolicy();
         _profiler.Reset();
         ResetWindowGate();
-        ResetSummary(_lastNowSeconds);
+        _summary.Reset(_lastNowSeconds);
     }
 
     public void Freeze()
@@ -363,163 +381,48 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         return PerformanceConfigValidator.Validate(config.Performance).Config.EvaluationWindowSeconds;
     }
 
-    private static int DefaultSampleEvery(PerformanceMetric metric)
-    {
-        switch (metric)
-        {
-            case PerformanceMetric.VoicePacket:
-            case PerformanceMetric.OpusDecode:
-            case PerformanceMetric.EnergyUpdate:
-                return VoiceSampleEvery;
-
-            case PerformanceMetric.DirectRoleSync:
-            case PerformanceMetric.CedModRoleSync:
-            case PerformanceMetric.CedModPostfix:
-                return SyncSampleEvery;
-
-            default:
-                return 1;
-        }
-    }
-
-    private void Aggregate(PerformanceWindow window)
-    {
-        _summaryWindows++;
-        _summaryDurationSeconds += window.DurationSeconds;
-        _summaryFrames += window.FrameCount;
-        _summaryTalkyMilliseconds += window.TotalTalkyMilliseconds;
-        _summaryFrameHistogram.Add(window);
-        if (window.FrameP95Milliseconds > _summaryWorstP95Milliseconds)
-            _summaryWorstP95Milliseconds = window.FrameP95Milliseconds;
-
-        _summaryVoiceMilliseconds +=
-            window.GetMetric(PerformanceMetric.VoicePacket).EstimatedTotalMilliseconds;
-        _summaryFaceMilliseconds +=
-            window.GetMetric(PerformanceMetric.FaceBatch).EstimatedTotalMilliseconds;
-        _summaryLookMilliseconds +=
-            window.GetMetric(PerformanceMetric.LookBatch).EstimatedTotalMilliseconds;
-        _summarySchedulerMilliseconds +=
-            window.GetMetric(PerformanceMetric.SchedulerOverhead).EstimatedTotalMilliseconds;
-        _summarySyncMilliseconds +=
-            window.GetMetric(PerformanceMetric.DirectRoleSync).EstimatedTotalMilliseconds +
-            window.GetMetric(PerformanceMetric.CedModRoleSync).EstimatedTotalMilliseconds +
-            window.GetMetric(PerformanceMetric.CedModPostfix).EstimatedTotalMilliseconds;
-        _summaryProfilerMilliseconds +=
-            window.GetMetric(PerformanceMetric.ProfilerOverhead).EstimatedTotalMilliseconds +
-            window.GetMetric(PerformanceMetric.Governor).EstimatedTotalMilliseconds;
-
-        _summaryVoicePackets += window.GetCounter(PerformanceCounter.VoicePackets);
-        _summaryDecodedSamples += window.GetCounter(PerformanceCounter.DecodedSamples);
-        _summaryGlanceCandidates += window.GetCounter(PerformanceCounter.GlanceCandidates);
-        _summarySyncEntries += window.GetCounter(PerformanceCounter.SyncEntries);
-        _summaryActiveTargetHits += window.GetCounter(PerformanceCounter.ActiveTargetHits);
-        _summaryRewrites += window.GetCounter(PerformanceCounter.Rewrites);
-        _summaryEmotionWrites += window.GetCounter(PerformanceCounter.EmotionWrites);
-    }
-
     private void TryLogSummary(double nowSeconds)
     {
         double interval = _governor.Settings.SummaryLogIntervalSeconds;
         if (interval == 0d)
             return;
         if (!IsFinite(interval) || interval < 0d)
-            interval = DefaultSummarySeconds;
+            interval = SummaryFallbackSeconds;
 
-        if (nowSeconds - _summaryStartedAt < interval)
+        if (nowSeconds - _summary.StartedAt < interval)
             return;
 
-        if (_summaryWindows > 0L)
+        if (_summary.HasWindows)
         {
-            double talkyPerFrame = _summaryFrames > 0L
-                ? _summaryTalkyMilliseconds / _summaryFrames
-                : 0d;
-            double talkyPerSecond = _summaryDurationSeconds > 0d
-                ? _summaryTalkyMilliseconds / _summaryDurationSeconds
-                : 0d;
-            double averageFrame = _summaryFrameHistogram.AverageMilliseconds;
-            double frameP50 = _summaryFrameHistogram.P50Milliseconds;
-            double frameP95 = _summaryFrameHistogram.P95Milliseconds;
-            double frameP99 = _summaryFrameHistogram.P99Milliseconds;
-            double averagePlayers = _summaryPopulationSamples > 0L
-                ? (double)_summaryPlayers / _summaryPopulationSamples
-                : 0d;
-            double averageSpeakers = _summaryPopulationSamples > 0L
-                ? (double)_summaryRecentSpeakers / _summaryPopulationSamples
-                : 0d;
-            double averageLooks = _summaryPopulationSamples > 0L
-                ? (double)_summaryActiveLooks / _summaryPopulationSamples
-                : 0d;
-            double averageSmoothDelta = _summarySmoothSamples > 0L
-                ? _summarySmoothDeltaMilliseconds / _summarySmoothSamples
-                : 0d;
-            double smoothTps = averageSmoothDelta > 0d
-                ? 1000d / averageSmoothDelta
-                : 0d;
-            double targetTps = _summarySmoothSamples > 0L
-                ? _summaryTargetTickrate / _summarySmoothSamples
-                : 0d;
-            double voiceShare = Share(_summaryVoiceMilliseconds);
-            double faceShare = Share(_summaryFaceMilliseconds);
-            double lookShare = Share(_summaryLookMilliseconds);
-            double schedulerShare = Share(_summarySchedulerMilliseconds);
-            double syncShare = Share(_summarySyncMilliseconds);
             PerformanceTier configuredTier =
                 _governor.Settings.Mode == PerformanceMode.Fixed
                     ? _governor.Settings.FixedTier
                     : PerformanceTier.Full;
 
-            Logger.Info(
-                $"Talky performance summary: mode={_governor.Settings.Mode}, " +
-                $"configured_tier={configuredTier}, effective_tier={Tier}, " +
-                $"last_trigger={_lastTransitionReason}, windows={_summaryWindows}, " +
-                $"talky={talkyPerFrame:F3} ms/frame ({talkyPerSecond:F2} ms/s), " +
-                $"frame_avg={averageFrame:F2} ms, " +
-                $"frame_p50={frameP50:F2} ms, frame_p95={frameP95:F2} ms, " +
-                $"frame_p99={frameP99:F2} ms, frame_max={_summaryFrameHistogram.MaxMilliseconds:F2} ms, " +
-                $"worst_window_p95={_summaryWorstP95Milliseconds:F2} ms, " +
-                $"smooth_tps={smoothTps:F1}/{targetTps:F1}, " +
-                $"voice={PerFrame(_summaryVoiceMilliseconds):F3} ({voiceShare:F1}%), " +
-                $"face={PerFrame(_summaryFaceMilliseconds):F3} ({faceShare:F1}%), " +
-                $"look={PerFrame(_summaryLookMilliseconds):F3} ({lookShare:F1}%), " +
-                $"scheduler={PerFrame(_summarySchedulerMilliseconds):F3} ({schedulerShare:F1}%), " +
-                $"sync={PerFrame(_summarySyncMilliseconds):F3} ({syncShare:F1}%), " +
-                $"profiler={PerFrame(_summaryProfilerMilliseconds):F3} ms/frame, " +
-                $"players_avg={averagePlayers:F1}, speakers_avg={averageSpeakers:F1}, " +
-                $"active_looks_avg={averageLooks:F1}, voice_packets={_summaryVoicePackets}, " +
-                $"decoded_samples={_summaryDecodedSamples}, " +
-                $"glance_candidates={_summaryGlanceCandidates}, sync_entries={_summarySyncEntries}, " +
-                $"active_target_hits={_summaryActiveTargetHits}, rewrites={_summaryRewrites}, " +
-                $"emotion_writes={_summaryEmotionWrites}.");
+            Logger.Info(_summary.CreateLogMessage(
+                _governor.Settings.Mode,
+                configuredTier,
+                Tier,
+                _lastTransitionReason));
         }
 
-        ResetSummary(nowSeconds);
+        _summary.Reset(nowSeconds);
     }
 
     private void LogTransition(
         GovernorDecision decision,
         PerformanceWindow window,
+        PerformanceBreakdown breakdown,
         int players,
         int recentSpeakers,
         int activeLooks)
     {
-        double voice = window.GetMetric(PerformanceMetric.VoicePacket).EstimatedTotalMilliseconds /
-                       window.FrameCount;
-        double face = window.GetMetric(PerformanceMetric.FaceBatch).EstimatedTotalMilliseconds /
-                      window.FrameCount;
-        double look = window.GetMetric(PerformanceMetric.LookBatch).EstimatedTotalMilliseconds /
-                      window.FrameCount;
-        double scheduler =
-            window.GetMetric(PerformanceMetric.SchedulerOverhead).EstimatedTotalMilliseconds /
-            window.FrameCount;
-        double sync =
-            (window.GetMetric(PerformanceMetric.DirectRoleSync).EstimatedTotalMilliseconds +
-             window.GetMetric(PerformanceMetric.CedModRoleSync).EstimatedTotalMilliseconds +
-             window.GetMetric(PerformanceMetric.CedModPostfix).EstimatedTotalMilliseconds) /
-            window.FrameCount;
-        double profiler =
-            (window.GetMetric(PerformanceMetric.ProfilerOverhead).EstimatedTotalMilliseconds +
-             window.GetMetric(PerformanceMetric.Governor).EstimatedTotalMilliseconds) /
-            window.FrameCount;
+        double voice = breakdown.VoiceMilliseconds / window.FrameCount;
+        double face = breakdown.FaceMilliseconds / window.FrameCount;
+        double look = breakdown.LookMilliseconds / window.FrameCount;
+        double scheduler = breakdown.SchedulerMilliseconds / window.FrameCount;
+        double sync = breakdown.SyncMilliseconds / window.FrameCount;
+        double profiler = breakdown.MonitoringMilliseconds / window.FrameCount;
         double smoothTps = _latestSmoothDeltaMilliseconds > 0d
             ? 1000d / _latestSmoothDeltaMilliseconds
             : 0d;
@@ -546,7 +449,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _profilingEnabled = false;
         _governor?.Freeze(reason);
         if (_config != null && _governor != null)
-            _currentPolicy = EffectivePerformancePolicy.Create(_config, _governor.CurrentTier);
+            RefreshCurrentPolicy();
     }
 
     private void FreezeAfterFailure(string reason)
@@ -572,9 +475,9 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             _lastNowSeconds = nowSeconds;
             _governor.Reconfigure(_config.Performance, nowSeconds);
             _profilingEnabled = _governor.Settings.Mode != PerformanceMode.Disabled;
-            _currentPolicy = EffectivePerformancePolicy.Create(_config, _governor.CurrentTier);
+            RefreshCurrentPolicy();
             _lastTransitionReason = InitialReason(_governor.Settings);
-            ResetSummary(nowSeconds);
+            _summary.Reset(nowSeconds);
             return;
         }
 
@@ -597,58 +500,20 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         }
     }
 
+    private void RefreshCurrentPolicy()
+    {
+        _currentPolicy = EffectivePerformancePolicy.Create(_config, _governor.CurrentTier);
+    }
+
     private void ResetWindowGate()
     {
         _windowHasFrames = false;
         _windowHealthEligible = false;
     }
 
-    private void ResetSummary(double nowSeconds)
-    {
-        _summaryStartedAt = nowSeconds;
-        _summaryDurationSeconds = 0d;
-        _summaryTalkyMilliseconds = 0d;
-        _summaryFrameHistogram.Reset();
-        _summaryWorstP95Milliseconds = 0d;
-        _summaryVoiceMilliseconds = 0d;
-        _summaryFaceMilliseconds = 0d;
-        _summaryLookMilliseconds = 0d;
-        _summarySchedulerMilliseconds = 0d;
-        _summarySyncMilliseconds = 0d;
-        _summaryProfilerMilliseconds = 0d;
-        _summarySmoothDeltaMilliseconds = 0d;
-        _summaryTargetTickrate = 0d;
-        _summaryFrames = 0L;
-        _summaryWindows = 0L;
-        _summarySmoothSamples = 0L;
-        _summaryVoicePackets = 0L;
-        _summaryDecodedSamples = 0L;
-        _summaryGlanceCandidates = 0L;
-        _summarySyncEntries = 0L;
-        _summaryActiveTargetHits = 0L;
-        _summaryRewrites = 0L;
-        _summaryEmotionWrites = 0L;
-        _summaryPopulationSamples = 0L;
-        _summaryPlayers = 0L;
-        _summaryRecentSpeakers = 0L;
-        _summaryActiveLooks = 0L;
-    }
-
     private static long NonNegative(int value)
     {
         return value > 0 ? value : 0L;
-    }
-
-    private double PerFrame(double totalMilliseconds)
-    {
-        return _summaryFrames > 0L ? totalMilliseconds / _summaryFrames : 0d;
-    }
-
-    private double Share(double subsystemMilliseconds)
-    {
-        return _summaryTalkyMilliseconds > 0d
-            ? 100d * subsystemMilliseconds / _summaryTalkyMilliseconds
-            : 0d;
     }
 
     private string PressureSource(PerformanceWindow window, bool serverHealthEligible)

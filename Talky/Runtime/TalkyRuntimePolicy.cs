@@ -1,3 +1,5 @@
+using System;
+using Talky.Performance;
 using Talky.Settings;
 
 namespace Talky.Runtime;
@@ -41,6 +43,20 @@ public sealed class TalkyRuntimePolicy
             true,
             config?.EnableHeadBobbing ?? true,
             config?.EnableGlancing ?? true);
+    }
+
+    public static TalkyRuntimePolicy FromEffective(EffectivePerformancePolicy policy)
+    {
+        if (policy == null)
+            throw new ArgumentNullException(nameof(policy));
+
+        return new TalkyRuntimePolicy(
+            policy.FaceIntervalSeconds,
+            policy.LookIntervalSeconds,
+            policy.GlanceIntervalSeconds,
+            policy.HeadMovementEnabled,
+            policy.HeadBobbingEnabled,
+            policy.GlancingEnabled);
     }
 
     private static float ClampInterval(float value, float fallback)

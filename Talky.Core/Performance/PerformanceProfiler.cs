@@ -4,38 +4,6 @@ using System.Runtime.CompilerServices;
 
 namespace Talky.Performance;
 
-public enum PerformanceMetric
-{
-    VoicePacket = 0,
-    OpusDecode = 1,
-    EnergyUpdate = 2,
-    FaceBatch = 3,
-    LookBatch = 4,
-    GlanceBatch = 5,
-    DirectRoleSync = 6,
-    CedModRoleSync = 7,
-    CedModPostfix = 8,
-    SchedulerOverhead = 9,
-    Governor = 10,
-    ProfilerOverhead = 11,
-    Count = 12,
-}
-
-public enum PerformanceCounter
-{
-    VoicePackets = 0,
-    DecodedSamples = 1,
-    TrackedPlayers = 2,
-    RecentSpeakers = 3,
-    GlanceCandidates = 4,
-    ActiveLookTargets = 5,
-    SyncEntries = 6,
-    ActiveTargetHits = 7,
-    Rewrites = 8,
-    EmotionWrites = 9,
-    Count = 10,
-}
-
 public readonly struct MetricSnapshot
 {
     internal MetricSnapshot(
@@ -148,19 +116,11 @@ public sealed class PerformanceWindow
 
     public static bool CountsTowardTalkyBudget(PerformanceMetric metric)
     {
-        switch (metric)
-        {
-            case PerformanceMetric.VoicePacket:
-            case PerformanceMetric.FaceBatch:
-            case PerformanceMetric.LookBatch:
-            case PerformanceMetric.DirectRoleSync:
-            case PerformanceMetric.CedModRoleSync:
-            case PerformanceMetric.CedModPostfix:
-            case PerformanceMetric.SchedulerOverhead:
-                return true;
-            default:
-                return false;
-        }
+        int index = (int)metric;
+        if (index < 0 || index >= (int)PerformanceMetric.Count)
+            return false;
+
+        return PerformanceMetricCatalog.CountsTowardTalkyBudget(metric);
     }
 
     internal void Clear(long startTimestamp)

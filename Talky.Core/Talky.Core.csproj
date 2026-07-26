@@ -46,7 +46,9 @@
         <Compile Include="Performance\AdaptivePerformanceGovernor.cs" />
         <Compile Include="Performance\EffectivePerformancePolicy.cs" />
         <Compile Include="Performance\PerformanceConfig.cs" />
+        <Compile Include="Performance\PerformanceMetrics.cs" />
         <Compile Include="Performance\PerformanceProfiler.cs" />
+        <Compile Include="Performance\PerformanceSummaryAccumulator.cs" />
         <Compile Include="Performance\RollingVoiceEnergy.cs" />
         <Compile Include="Settings\Config.cs" />
         <Compile Include="Settings\TranslationsConfig.cs" />

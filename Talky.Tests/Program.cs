@@ -24,6 +24,7 @@ internal static class Program
             TestGovernorModesAndBoundaries();
             TestGovernorRecoveryHysteresis();
             TestProfiler();
+            TestMetricCatalogAndSummary();
 
             Console.WriteLine("PASS: " + _assertions + " deterministic assertions.");
             return 0;
@@ -653,6 +654,142 @@ internal static class Program
         allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
         Equal(0L, allocated, "Summary histogram accumulation is allocation-free");
         Throws<ArgumentNullException>(() => aggregate.Add(null), "Summary histogram rejects null window");
+    }
+
+    private static void TestMetricCatalogAndSummary()
+    {
+        bool[] budgeted =
+        {
+            true, false, false, true, true, false,
+            true, true, true, true, false, false,
+        };
+        int[] sampleEvery =
+        {
+            8, 8, 8, 1, 1, 1,
+            64, 64, 64, 1, 1, 1,
+        };
+        PerformanceSubsystem[] subsystem =
+        {
+            PerformanceSubsystem.Voice,
+            PerformanceSubsystem.None,
+            PerformanceSubsystem.None,
+            PerformanceSubsystem.Face,
+            PerformanceSubsystem.Look,
+            PerformanceSubsystem.None,
+            PerformanceSubsystem.Sync,
+            PerformanceSubsystem.Sync,
+            PerformanceSubsystem.Sync,
+            PerformanceSubsystem.Scheduler,
+            PerformanceSubsystem.Monitoring,
+            PerformanceSubsystem.Monitoring,
+        };
+
+        for (int index = 0; index < (int)PerformanceMetric.Count; index++)
+        {
+            PerformanceMetric metric = (PerformanceMetric)index;
+            PerformanceMetricDefinition definition = PerformanceMetricCatalog.Get(metric);
+            Equal(budgeted[index], definition.CountsTowardTalkyBudget, metric + " budget mapping");
+            Equal(sampleEvery[index], definition.DefaultSampleEvery, metric + " sample cadence");
+            Equal(subsystem[index], definition.SummarySubsystem, metric + " summary group");
+            Equal(
+                budgeted[index],
+                PerformanceWindow.CountsTowardTalkyBudget(metric),
+                metric + " profiler budget mapping");
+        }
+
+        Throws<ArgumentOutOfRangeException>(
+            () => PerformanceMetricCatalog.Get(PerformanceMetric.Count),
+            "Metric catalog rejects sentinel");
+        True(
+            !PerformanceWindow.CountsTowardTalkyBudget(PerformanceMetric.Count),
+            "Profiler budget wrapper preserves invalid-metric behavior");
+
+        PerformanceProfiler profiler = new PerformanceProfiler(2, 60, 1000L, 0L);
+        for (int index = 0; index < (int)PerformanceMetric.Count; index++)
+            profiler.RecordDurationTicks((PerformanceMetric)index, index + 1L);
+        for (int index = 0; index < (int)PerformanceCounter.Count; index++)
+            profiler.Increment((PerformanceCounter)index, index + 1L);
+        profiler.RecordFrameMilliseconds(10d);
+        profiler.RecordFrameMilliseconds(20d);
+        True(profiler.TryCloseWindow(2000L, out PerformanceWindow window), "Summary source closes");
+
+        PerformanceBreakdown breakdown = PerformanceBreakdown.FromWindow(window);
+        Near(1d, breakdown.VoiceMilliseconds, 0d, "Summary voice excludes nested decode");
+        Near(4d, breakdown.FaceMilliseconds, 0d, "Summary face group");
+        Near(5d, breakdown.LookMilliseconds, 0d, "Summary look excludes nested glance");
+        Near(10d, breakdown.SchedulerMilliseconds, 0d, "Summary scheduler group");
+        Near(24d, breakdown.SyncMilliseconds, 0d, "Summary combines all sync paths");
+        Near(23d, breakdown.MonitoringMilliseconds, 0d, "Summary combines monitor overhead");
+
+        PerformanceSummaryAccumulator summary = new PerformanceSummaryAccumulator();
+        summary.Reset(100d);
+        summary.RecordEligibleFrame(10, 2, 3, 20d, 50, true);
+        summary.RecordEligibleFrame(20, 4, 5, 25d, 40, true);
+        summary.AddWindow(window, breakdown);
+
+        Near(100d, summary.StartedAt, 0d, "Summary start time");
+        Equal(1L, summary.WindowCount, "Summary window count");
+        Equal(2L, summary.FrameCount, "Summary frame count");
+        Near(44d, summary.TotalTalkyMilliseconds, 0d, "Summary budget total");
+        Near(22d, summary.TalkyMillisecondsPerFrame, 0d, "Summary Talky per frame");
+        Near(22d, summary.TalkyMillisecondsPerSecond, 0d, "Summary Talky per second");
+        Near(15d, summary.AveragePlayers, 0d, "Summary average players");
+        Near(3d, summary.AverageRecentSpeakers, 0d, "Summary average speakers");
+        Near(4d, summary.AverageActiveLooks, 0d, "Summary average active looks");
+        Near(1000d / 22.5d, summary.SmoothTickrate, 1e-9d, "Summary smooth tickrate");
+        Near(45d, summary.TargetTickrate, 0d, "Summary target tickrate");
+        Near(
+            12d,
+            summary.GetSubsystemMillisecondsPerFrame(PerformanceSubsystem.Sync),
+            0d,
+            "Summary sync per frame");
+        Near(
+            100d / 44d,
+            summary.GetSubsystemShare(PerformanceSubsystem.Voice),
+            1e-9d,
+            "Summary subsystem share");
+        Equal(1L, summary.GetCounter(PerformanceCounter.VoicePackets), "Summary voice counter");
+        Equal(10L, summary.GetCounter(PerformanceCounter.EmotionWrites), "Summary emotion counter");
+
+        string message = summary.CreateLogMessage(
+            PerformanceMode.Automatic,
+            PerformanceTier.Full,
+            PerformanceTier.Economy,
+            GovernorReason.SoftTalkyBudget);
+        True(message.Contains("effective_tier=Economy"), "Summary message effective tier");
+        True(
+            message.Contains($"voice={0.5d:F3} ({100d / 44d:F1}%)"),
+            "Summary message voice field");
+        True(
+            message.Contains($"profiler={11.5d:F3} ms/frame"),
+            "Summary message monitoring field");
+        True(message.Contains("sync_entries=7"), "Summary message counter values");
+
+        summary.Reset(200d);
+        summary.RecordEligibleFrame(1, 0, 0, double.NaN, 0, false);
+        Near(0d, summary.SmoothTickrate, 0d, "Summary ignores unavailable smooth tickrate");
+        summary.Reset(200d);
+        summary.AddWindow(window, breakdown);
+        summary.RecordEligibleFrame(10, 2, 3, 20d, 50, true);
+        summary.Reset(200d);
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int iteration = 0; iteration < 1000; iteration++)
+        {
+            breakdown = PerformanceBreakdown.FromWindow(window);
+            summary.AddWindow(window, breakdown);
+            summary.RecordEligibleFrame(10, 2, 3, 20d, 50, true);
+            _measurementSink += breakdown.SyncMilliseconds;
+            _measurementSink += PerformanceMetricCatalog.DefaultSampleEvery(
+                (PerformanceMetric)(iteration % (int)PerformanceMetric.Count));
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Equal(0L, allocated, "Summary accumulation steady-state allocation");
+
+        summary.Reset(300d);
+        True(!summary.HasWindows, "Summary reset clears windows");
+        Equal(0L, summary.FrameCount, "Summary reset clears frames");
+        Near(0d, summary.GetSubsystemMilliseconds(PerformanceSubsystem.Sync), 0d, "Summary reset clears groups");
+        Equal(0L, summary.GetCounter(PerformanceCounter.EmotionWrites), "Summary reset clears counters");
     }
 
     private static bool IsRecentSpeech(double lastPacketSeconds, double nowSeconds, double durationMilliseconds)
