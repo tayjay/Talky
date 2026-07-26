@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Talky.Performance;
 
 namespace Talky.Settings;
 
@@ -57,6 +58,8 @@ public class Config
     [Description("Should Spectators see client-side head movements? Default is false.")]
     public bool EnabledSpectatorHeadMovements { get; set; } = false;
 
+    [Description("Performance profiling and automatic quality controls.")]
+    public PerformanceConfig Performance { get; set; } = new PerformanceConfig();
 
     [Description("Talky plugin translations")]
     public TranslationsConfig Translations { get; set; } = new TranslationsConfig();

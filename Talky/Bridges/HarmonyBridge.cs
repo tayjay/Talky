@@ -9,7 +9,9 @@ namespace Talky.Bridges;
 
 internal static class HarmonyBridge
 {
-    //public static Harmony HarmonyInstance;
+    private const string HarmonyId = "talky";
+    private static Harmony _harmony;
+    private static bool _patched;
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool HarmonyPresent()
@@ -21,8 +23,9 @@ internal static class HarmonyBridge
     public static bool ApplyPatches()
     {
         if (!HarmonyPresent()) return false;
+        if (_patched) return true;
 
-        var harmony = new Harmony("talky");
+        _harmony = new Harmony(HarmonyId);
         
         // Applying a prefix and postfix to CedMod patch
         var original = AccessTools.Method("CedMod.Addons.Sentinal.Patches.FpcServerPositionDistributorPatch:GetNewSyncData",
@@ -30,10 +33,21 @@ internal static class HarmonyBridge
 
         if (original == null) return false;
         
-        harmony.Patch(original, new HarmonyMethod(typeof(HarmonyBridge), nameof(Prefix)),
-            new HarmonyMethod(typeof(HarmonyBridge), nameof(Postfix)));
+        try
+        {
+            _harmony.Patch(original, new HarmonyMethod(typeof(HarmonyBridge), nameof(Prefix)),
+                new HarmonyMethod(typeof(HarmonyBridge), nameof(Postfix)));
 
-        return true;
+            _patched = true;
+            return true;
+        }
+        catch
+        {
+            _harmony.UnpatchAll(HarmonyId);
+            _harmony = null;
+            _patched = false;
+            throw;
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -41,20 +55,22 @@ internal static class HarmonyBridge
     {
         if(!HarmonyPresent()) return;
         
-        var harmony = new Harmony("talky");
-        harmony.UnpatchAll();
+        _harmony?.UnpatchAll(HarmonyId);
+        _harmony = null;
+        _patched = false;
     }
 
     static void Prefix(ReferenceHub receiver, ReferenceHub target, FirstPersonMovementModule fpmm, bool isInvisible,
         bool nearPositioning)
     {
-        Plugin.Instance.FakeLookHandler.CallPrefix(receiver, target, fpmm, isInvisible, nearPositioning);
+        Plugin.Instance?.FakeLookHandler?.CallPrefix(receiver, target, fpmm, isInvisible, nearPositioning);
     }
 
     static void Postfix(ReferenceHub receiver, ReferenceHub target, FirstPersonMovementModule fpmm, bool isInvisible,
         bool nearPositioning, ref FpcSyncData __result)
     {
-        __result = Plugin.Instance.FakeLookHandler.CallPostfix(receiver, target, fpmm, isInvisible, nearPositioning,
-            __result);
+        var handler = Plugin.Instance?.FakeLookHandler;
+        if (handler != null)
+            __result = handler.CallPostfix(receiver, target, fpmm, isInvisible, nearPositioning, __result);
     }
 }

@@ -1,77 +1,69 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using LabApi.Events.Arguments.PlayerEvents;
-using MEC;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerStatsSystem;
 using Talky.Behaviours;
+using Talky.Runtime;
 using VoiceChat;
 
 namespace Talky.Handlers;
 
-public class VoiceChattingHandler
+public sealed class VoiceChattingHandler
 {
-        
-    public readonly Dictionary<uint, SpeechTracker> SpeechTrackerCache = new Dictionary<uint, SpeechTracker>();
+    private static readonly IReadOnlyDictionary<uint, SpeechTracker> EmptyTrackers =
+        new Dictionary<uint, SpeechTracker>();
 
-    /**
-     * When the player talks and sends a voice message to the server.
-     */
+    private bool _registered;
+
+    /// <summary>
+    /// Compatibility view for integrations that previously read the handler cache.
+    /// Runtime owns the mutable dictionary.
+    /// </summary>
+    public IReadOnlyDictionary<uint, SpeechTracker> SpeechTrackerCache =>
+        Plugin.Instance?.Runtime?.SpeechTrackers ?? EmptyTrackers;
+
+    private TalkyRuntime Runtime => Plugin.Instance?.Runtime;
+
     private void OnNewVoiceSending(PlayerSendingVoiceMessageEventArgs ev)
     {
-        if (ev.Message.Channel is VoiceChatChannel.Proximity or VoiceChatChannel.Radio or VoiceChatChannel.Intercom or VoiceChatChannel.Scp1576)
+        if (ev.Message.Channel is VoiceChatChannel.Proximity or
+            VoiceChatChannel.Radio or
+            VoiceChatChannel.Intercom or
+            VoiceChatChannel.Scp1576)
         {
-            if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
-            {
-                return;
-            }
-            tracker.VoiceMessageReceived(ev.Message.Data, ev.Message.DataLength);
+            Runtime?.HandleVoice(ev.Player.NetworkId, ev.Message.Data, ev.Message.DataLength);
         }
     }
 
-    /**
-     * When the player is hurt.
-     */
     private void OnHurt(PlayerHurtEventArgs ev)
     {
-        if(!Plugin.Instance.Config.EnableReactionOnHurt) return;
-        if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null)
-        {
+        if (Plugin.Instance?.Config?.EnableReactionOnHurt != true)
             return;
-        }
 
         int damage = 1000;
         if (ev.DamageHandler is StandardDamageHandler standardDamageHandler)
-        {
             damage = (int)Math.Floor(standardDamageHandler.DealtHealthDamage);
-        }
-        if(damage <=Plugin.Instance.Config.MiniumDamageForReaction ) return;
 
-        tracker.OverrideEmotion(EmotionPresetType.Angry, Math.Min(1000, damage*100));
+        if (damage <= Plugin.Instance.Config.MiniumDamageForReaction)
+            return;
+
+        Runtime?.TriggerEmotion(
+            ev.Player.NetworkId,
+            EmotionPresetType.Angry,
+            Math.Min(1000, damage * 100));
     }
 
-		
-
-    /**
-     * When the player spawns, add the SpeechTracker component if it doesn't already exist.
-     */
     private void OnSpawn(PlayerSpawnedEventArgs ev)
     {
-        var hub = ev.Player.ReferenceHub;
-        if (!hub.TryGetComponent(out SpeechTracker tracker))
-        {
-            tracker = hub.gameObject.AddComponent<SpeechTracker>();
-        }
-        SpeechTrackerCache[hub.netId] = tracker;
-        tracker.OverrideEmotion(tracker.defaultPreset,100);
+        Runtime?.RegisterPlayer(ev.Player);
     }
 
-    /**
-     * When the player uses an item (Medkit, SCP207, etc.), make them emote accordingly.
-     */
     private void OnUsingItem(PlayerUsingItemEventArgs ev)
     {
-        if(!Plugin.Instance.Config.EnableEmoteOnConsumables) return;
+        if (Plugin.Instance?.Config?.EnableEmoteOnConsumables != true)
+            return;
+
         float waitTime;
         int openTime;
         switch (ev.UsableItem.Type)
@@ -97,45 +89,26 @@ public class VoiceChattingHandler
             default:
                 return;
         }
-            
-        Timing.CallDelayed(waitTime, () =>
-        {
-            if(!ev.IsAllowed) return;
-            if(ev.UsableItem is not { IsUsing: true }) return;
-            if(!SpeechTrackerCache.TryGetValue(ev.Player.NetworkId, out SpeechTracker tracker) || tracker==null) return;
-            tracker.OverrideEmotion(EmotionPresetType.Scared, openTime);
-            if (ev.UsableItem.Type == ItemType.AntiSCP207)
-            {
-                Timing.CallDelayed(2.4f, () =>
-                {
-                    tracker.OverrideEmotion(EmotionPresetType.AwkwardSmile, 500);
-                });
-            } else if( ev.UsableItem.Type == ItemType.SCP207)
-            {
-                Timing.CallDelayed(2.5f, () =>
-                {
-                    tracker.OverrideEmotion(EmotionPresetType.Happy, 500);
-                });
-            }
-        });
-            
-    }
 
+        Runtime?.ScheduleConsumableEmotion(ev, waitTime, openTime);
+    }
 
     private void OnRoundRestart()
     {
-        SpeechTrackerCache.Clear();
+        Runtime?.OnRoundRestart();
     }
 
     private void OnPlayerLeft(PlayerLeftEventArgs ev)
     {
-        SpeechTrackerCache.Remove(ev.Player.ReferenceHub.netId);
+        Runtime?.UnregisterPlayer(ev.Player.NetworkId);
     }
-        
-        
+
     public void RegisterEvents()
     {
-        // Register the event handler for voice messages
+        if (_registered)
+            return;
+
+        _registered = true;
         LabApi.Events.Handlers.PlayerEvents.SendingVoiceMessage += OnNewVoiceSending;
         LabApi.Events.Handlers.PlayerEvents.Spawned += OnSpawn;
         LabApi.Events.Handlers.PlayerEvents.Hurt += OnHurt;
@@ -143,11 +116,13 @@ public class VoiceChattingHandler
         LabApi.Events.Handlers.ServerEvents.RoundRestarted += OnRoundRestart;
         LabApi.Events.Handlers.PlayerEvents.Left += OnPlayerLeft;
     }
-        
+
     public void UnregisterEvents()
     {
-        SpeechTrackerCache.Clear();
-        // Unregister the event handler for voice messages
+        if (!_registered)
+            return;
+
+        _registered = false;
         LabApi.Events.Handlers.PlayerEvents.SendingVoiceMessage -= OnNewVoiceSending;
         LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
         LabApi.Events.Handlers.PlayerEvents.Hurt -= OnHurt;

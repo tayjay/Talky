@@ -6,6 +6,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talky.Core", "Talky.Core\Ta
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talky.Exiled", "Talky.Exiled\Talky.Exiled.csproj", "{A1B2C3D4-0002-4000-8000-000000000002}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talky.Tests", "Talky.Tests\Talky.Tests.csproj", "{A1B2C3D4-0003-4000-8000-000000000003}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Talky.Benchmarks", "Talky.Benchmarks\Talky.Benchmarks.csproj", "{A1B2C3D4-0004-4000-8000-000000000004}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,5 +35,17 @@ Global
 		{A1B2C3D4-0002-4000-8000-000000000002}.Release|x64.Build.0 = Release|x64
 		{A1B2C3D4-0002-4000-8000-000000000002}.EXILED|x64.ActiveCfg = EXILED|x64
 		{A1B2C3D4-0002-4000-8000-000000000002}.EXILED|x64.Build.0 = EXILED|x64
+		{A1B2C3D4-0003-4000-8000-000000000003}.Debug|x64.ActiveCfg = Debug|x64
+		{A1B2C3D4-0003-4000-8000-000000000003}.Debug|x64.Build.0 = Debug|x64
+		{A1B2C3D4-0003-4000-8000-000000000003}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-0003-4000-8000-000000000003}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-0003-4000-8000-000000000003}.EXILED|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-0003-4000-8000-000000000003}.EXILED|x64.Build.0 = Release|x64
+		{A1B2C3D4-0004-4000-8000-000000000004}.Debug|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-0004-4000-8000-000000000004}.Debug|x64.Build.0 = Release|x64
+		{A1B2C3D4-0004-4000-8000-000000000004}.Release|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-0004-4000-8000-000000000004}.Release|x64.Build.0 = Release|x64
+		{A1B2C3D4-0004-4000-8000-000000000004}.EXILED|x64.ActiveCfg = Release|x64
+		{A1B2C3D4-0004-4000-8000-000000000004}.EXILED|x64.Build.0 = Release|x64
 	EndGlobalSection
 EndGlobal
