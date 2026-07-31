@@ -16,6 +16,7 @@ internal static class Program
         try
         {
             TestRollingVoiceEnergy();
+            _assertions += RollingSpeechPercentilesTests.Run();
             TestVoicePresentationState();
             TestConfigurationAndPolicy();
             TestRecentSpeakerExpiry();
@@ -23,8 +24,11 @@ internal static class Program
             TestGovernor();
             TestGovernorModesAndBoundaries();
             TestGovernorRecoveryHysteresis();
+            TestGovernorRecoveryProbeLifecycle();
+            TestGovernorFullRecoverySequence();
             TestProfiler();
             TestMetricCatalogAndSummary();
+            TestPerformanceTransitionTracker();
 
             Console.WriteLine("PASS: " + _assertions + " deterministic assertions.");
             return 0;
@@ -152,6 +156,7 @@ internal static class Program
         Equal(90, defaults.RecoveryHealthySeconds, "Default recovery duration");
         Near(0.5d, defaults.RecoveryBudgetRatio, 0d, "Default recovery ratio");
         Equal(60, defaults.RecoveryCooldownSeconds, "Default recovery cooldown");
+        Equal(10, defaults.RecoveryProbeSeconds, "Default recovery probe");
         Equal(20, defaults.EconomyFaceHz, "Default economy face rate");
         Equal(10, defaults.EconomyGlanceHz, "Default economy glance rate");
         Equal(30, defaults.EconomyLookHz, "Default economy look rate");
@@ -167,6 +172,7 @@ internal static class Program
             ServerP95RecoveryMs = 100d,
             EvaluationWindowSeconds = 0,
             RecoveryBudgetRatio = 2d,
+            RecoveryProbeSeconds = 1,
             EconomyFaceHz = 8,
             MinimumFaceHz = 60,
             SummaryLogIntervalSeconds = -1,
@@ -181,6 +187,18 @@ internal static class Program
         True(validation.Config.MinimumFaceHz <= validation.Config.EconomyFaceHz, "Floor rate <= economy");
         True(validation.Config.MinimumFaceHz >= 15, "Face floor cannot be configured below 15Hz");
         True(validation.Config.EconomyFaceHz >= 15, "Economy face rate cannot undercut hard floor");
+        Equal(10, validation.Config.RecoveryProbeSeconds, "Recovery probe enforces ten-second minimum");
+        PerformanceConfig customProbe = new PerformanceConfig { RecoveryProbeSeconds = 45 };
+        Equal(45, customProbe.Clone().RecoveryProbeSeconds, "Recovery probe clone preserves custom value");
+        Equal(
+            45,
+            PerformanceConfigValidator.Validate(customProbe).Config.RecoveryProbeSeconds,
+            "Recovery probe validation preserves in-range custom value");
+        Equal(
+            60,
+            PerformanceConfigValidator.Validate(
+                new PerformanceConfig { RecoveryProbeSeconds = 61 }).Config.RecoveryProbeSeconds,
+            "Recovery probe stays within retained impact history");
 
         Config root = new Config();
         EffectivePerformancePolicy full = EffectivePerformancePolicy.Create(root, PerformanceTier.Full);
@@ -387,19 +405,31 @@ internal static class Program
         GovernorSample healthy = new GovernorSample(0.25d, 16d, true);
         True(!governor.Evaluate(healthy, 12d).Changed, "Recovery healthy window 1");
         decision = governor.Evaluate(healthy, 14d);
-        True(decision.Changed, "Recovery after configured healthy duration");
-        Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Recovery restores one tier");
+        True(decision.Changed, "Recovery probe starts after configured healthy duration");
+        Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Recovery probe restores one tier");
+        Equal(PerformanceTier.FaceOnly, governor.CommittedTier, "Recovery probe retains committed tier");
+        True(governor.IsRecoveryProbeActive, "Recovery remains provisional during observation");
 
-        governor.Evaluate(new GovernorSample(double.NaN, 0d, false), 16d);
+        governor.Evaluate(healthy, 16d);
+        governor.Evaluate(healthy, 18d);
+        governor.Evaluate(healthy, 20d);
+        governor.Evaluate(healthy, 22d);
+        decision = governor.Evaluate(healthy, 24d);
+        Equal(GovernorReason.RecoveryProbeSucceeded, decision.Reason, "Recovery probe success event");
+        True(!decision.Changed, "Committing a recovery probe does not reapply its policy");
+        Equal(PerformanceTier.NoGlancing, governor.CommittedTier, "Successful probe commits restored tier");
+        True(!governor.IsRecoveryProbeActive, "Successful probe clears provisional state");
+
+        governor.Evaluate(new GovernorSample(double.NaN, 0d, false), 26d);
         True(governor.IsFrozen, "Invalid profiler sample freezes governor");
         Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Freeze preserves tier");
 
         config.Mode = PerformanceMode.Fixed;
         config.FixedTier = PerformanceTier.NoGlancing;
-        governor.Reconfigure(config, 20d);
+        governor.Reconfigure(config, 30d);
         True(!governor.IsFrozen, "Reconfigure clears fault freeze");
         Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Fixed mode applies tier");
-        Equal(GovernorReason.FixedTier, governor.Evaluate(soft, 22d).Reason, "Fixed mode does not adapt");
+        Equal(GovernorReason.FixedTier, governor.Evaluate(soft, 32d).Reason, "Fixed mode does not adapt");
     }
 
     private static void TestGovernorModesAndBoundaries()
@@ -512,27 +542,255 @@ internal static class Program
         governor.Evaluate(healthy, 14d);
         governor.Evaluate(healthy, 16d);
         GovernorDecision decision = governor.Evaluate(healthy, 18d);
-        True(decision.Changed, "Continuous healthy duration recovers after interrupted evidence resets");
+        True(decision.Changed, "Continuous healthy duration starts recovery after interrupted evidence resets");
         Equal(GovernorReason.Recovery, decision.Reason, "Recovery transition reason");
-        Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Recovery restores exactly one tier");
+        Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Recovery probe restores exactly one tier");
+        Equal(PerformanceTier.FaceOnly, governor.CommittedTier, "Probe source remains committed");
 
-        decision = governor.Evaluate(healthy, 20d);
-        True(!decision.Changed, "Fresh recovery probation prevents immediate second restoration");
-        decision = governor.Evaluate(healthy, 22d);
-        True(decision.Changed, "Fresh recovery probation allows restoration at boundary");
-        Equal(PerformanceTier.Economy, governor.CurrentTier, "Second recovery again restores one tier");
+        governor.Evaluate(healthy, 20d);
+        governor.Evaluate(healthy, 22d);
+        governor.Evaluate(healthy, 24d);
+        governor.Evaluate(healthy, 26d);
+        decision = governor.Evaluate(healthy, 28d);
+        Equal(GovernorReason.RecoveryProbeSucceeded, decision.Reason, "Ten healthy probe seconds commit recovery");
+        Equal(PerformanceTier.NoGlancing, governor.CommittedTier, "Committed tier advances once");
 
-        config.RecoveryHealthySeconds = 10;
-        governor.Reconfigure(config, 22d);
-        governor.Evaluate(new GovernorSample(1.1d, 16d, true), 24d);
-        governor.Evaluate(new GovernorSample(1.1d, 16d, true), 26d);
-        governor.Evaluate(new GovernorSample(1.1d, 16d, true), 28d);
-        Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Renewed pressure degrades after recovery");
         governor.Evaluate(healthy, 30d);
         governor.Evaluate(healthy, 32d);
-        True(!governor.Evaluate(healthy, 34d).Changed, "Degradation requires full recovery healthy period again");
-        True(!governor.Evaluate(healthy, 36d).Changed, "Full recovery period continues beyond former probation");
-        True(governor.Evaluate(healthy, 38d).Changed, "Full recovery duration restores after renewed degradation");
+        governor.Evaluate(healthy, 34d);
+        governor.Evaluate(healthy, 36d);
+        decision = governor.Evaluate(healthy, 38d);
+        True(decision.Changed, "Next recovery waits for the ten-second retry gate");
+        Equal(PerformanceTier.Economy, governor.CurrentTier, "Next probe restores one additional tier");
+
+        decision = governor.Evaluate(new GovernorSample(1.1d, 16d, true), 40d);
+        True(decision.Changed, "Over-budget recovery probe rolls back immediately");
+        Equal(GovernorReason.RecoveryProbeFailed, decision.Reason, "Probe rollback reason");
+        Equal(PerformanceTier.NoGlancing, governor.CurrentTier, "Failed probe restores committed tier");
+        Equal(PerformanceTier.NoGlancing, governor.CommittedTier, "Failed probe does not commit");
+        True(!governor.IsRecoveryProbeActive, "Failed probe clears provisional state");
+
+        governor.Evaluate(healthy, 42d);
+        governor.Evaluate(healthy, 44d);
+        governor.Evaluate(healthy, 46d);
+        True(!governor.Evaluate(healthy, 48d).Changed, "Failed probe cannot retry before ten seconds");
+        True(governor.Evaluate(healthy, 50d).Changed, "Failed probe retries at ten-second boundary");
+    }
+
+    private static void TestGovernorRecoveryProbeLifecycle()
+    {
+        PerformanceConfig config = FastGovernorConfig();
+        config.RecoveryHealthySeconds = 2;
+        config.TransitionCooldownSeconds = 300;
+        AdaptivePerformanceGovernor governor = new AdaptivePerformanceGovernor(config, 0d);
+        GovernorSample healthy = new GovernorSample(0.25d, 16d, true, true, 2d);
+
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        GovernorDecision decision = governor.Evaluate(healthy, 2d);
+        True(decision.Changed && governor.IsRecoveryProbeActive, "Healthy headroom starts probe");
+        Equal(PerformanceTier.FaceOnly, governor.CommittedTier, "Probe starts from committed floor");
+
+        decision = governor.Evaluate(
+            new GovernorSample(config.TalkyBudgetMsPerFrame, config.ServerP95DegradeMs, true, true, 2d),
+            4d);
+        Equal(GovernorReason.RecoveryProbe, decision.Reason, "Exact soft budgets remain probe-healthy");
+
+        decision = governor.Evaluate(new GovernorSample(1.01d, 16d, true, true, 2d), 6d);
+        Equal(GovernorReason.RecoveryProbeFailed, decision.Reason, "Soft probe miss bypasses ordinary cooldown");
+        Equal(PerformanceTier.FaceOnly, governor.CurrentTier, "Soft probe miss rolls back source tier");
+
+        governor.Evaluate(healthy, 8d);
+        governor.Evaluate(healthy, 10d);
+        governor.Evaluate(healthy, 12d);
+        governor.Evaluate(healthy, 14d);
+        True(!governor.Evaluate(healthy, 15.999d).Changed, "Retry gate is strict before ten seconds");
+        decision = governor.Evaluate(healthy, 16d);
+        True(decision.Changed && governor.IsRecoveryProbeActive, "Retry gate opens exactly at ten seconds");
+
+        governor.Evaluate(healthy, 18d);
+        governor.Evaluate(healthy, 20d);
+        governor.Evaluate(healthy, 22d);
+        governor.Evaluate(healthy, 24d);
+        decision = governor.Evaluate(healthy, 26d);
+        Equal(GovernorReason.RecoveryProbeSucceeded, decision.Reason, "Probe commits after ten eligible seconds");
+
+        governor.Evaluate(healthy, 28d);
+        governor.Evaluate(healthy, 30d);
+        governor.Evaluate(healthy, 32d);
+        governor.Evaluate(healthy, 34d);
+        decision = governor.Evaluate(healthy, 36d);
+        True(decision.Changed && governor.IsRecoveryProbeActive, "Next tier begins as a probe");
+        PerformanceTier committedBeforeReset = governor.CommittedTier;
+        governor.ResetForRound(37d);
+        True(!governor.IsRecoveryProbeActive, "Round reset cancels active recovery probe");
+        Equal(committedBeforeReset, governor.CurrentTier, "Round reset rolls back uncommitted tier");
+
+        decision = governor.Evaluate(healthy, 39d);
+        True(decision.Changed && governor.IsRecoveryProbeActive, "Recovery can probe again after round reset");
+        governor.Freeze("test");
+        True(governor.IsFrozen && !governor.IsRecoveryProbeActive, "Freeze cancels active recovery probe");
+        Equal(governor.CommittedTier, governor.CurrentTier, "Freeze retains only committed tier");
+
+        governor.Reconfigure(config, 50d);
+        decision = governor.Evaluate(healthy, 52d);
+        True(decision.Changed && governor.IsRecoveryProbeActive, "Reconfigure restarts recovery evidence");
+        governor.Reconfigure(config, 53d);
+        True(!governor.IsRecoveryProbeActive, "Reconfigure cancels active recovery probe");
+        Equal(governor.CommittedTier, governor.CurrentTier, "Reconfigure rolls back provisional tier");
+
+        governor.Evaluate(healthy, 55d);
+        governor.Evaluate(healthy, 57d);
+        True(governor.IsRecoveryProbeActive, "Probe restarts for ineligible-window test");
+        governor.Evaluate(healthy, 59d);
+        governor.Evaluate(healthy, 61d);
+        governor.Evaluate(healthy, 63d);
+        Equal(
+            GovernorReason.RecoveryProbe,
+            governor.Evaluate(new GovernorSample(0.25d, 0d, false, true, 2d), 65d).Reason,
+            "Ineligible window does not commit probe");
+        governor.Evaluate(healthy, 67d);
+        governor.Evaluate(healthy, 69d);
+        governor.Evaluate(healthy, 71d);
+        governor.Evaluate(healthy, 73d);
+        decision = governor.Evaluate(healthy, 75d);
+        Equal(GovernorReason.RecoveryProbeSucceeded, decision.Reason, "Probe needs ten fresh eligible seconds");
+
+        config = FastGovernorConfig();
+        config.RecoveryHealthySeconds = 2;
+        governor = new AdaptivePerformanceGovernor(config, 0d);
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        governor.Evaluate(healthy, 2d);
+        decision = governor.Evaluate(
+            new GovernorSample(0.25d, 16d, true, true, 10d),
+            2.1d);
+        Equal(GovernorReason.RecoveryProbe, decision.Reason, "Probe cannot commit before wall-clock minimum");
+        decision = governor.Evaluate(healthy, 12d);
+        Equal(GovernorReason.RecoveryProbeSucceeded, decision.Reason, "Probe requires sampled and elapsed duration");
+
+        config = FastGovernorConfig();
+        config.RecoveryHealthySeconds = 10;
+        governor = new AdaptivePerformanceGovernor(config, 0d);
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        for (int windowIndex = 1; windowIndex < 5; windowIndex++)
+        {
+            True(
+                !governor.Evaluate(healthy, windowIndex * 2d).Changed,
+                "Ten-second recovery gate waits for all five windows");
+        }
+        decision = governor.Evaluate(healthy, 10d);
+        True(decision.Changed, "Ten-second recovery gate opens on fifth window");
+
+        config = FastGovernorConfig();
+        config.RecoveryHealthySeconds = 2;
+        governor = new AdaptivePerformanceGovernor(config, 0d);
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        governor.Evaluate(healthy, 2d);
+        GovernorSample serverEmergency =
+            new GovernorSample(0.25d, 34d, true, true, 2d);
+        decision = governor.Evaluate(serverEmergency, 4d);
+        Equal(GovernorReason.RecoveryProbeFailed, decision.Reason, "First server emergency rejects probe");
+        decision = governor.Evaluate(serverEmergency, 6d);
+        Equal(GovernorReason.ServerEmergency, decision.Reason, "Emergency evidence survives probe rollback");
+        Equal(PerformanceTier.FaceOnlyReducedRate, governor.CurrentTier, "Second emergency reaches floor");
+
+        governor = new AdaptivePerformanceGovernor(config, 0d);
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        governor.Evaluate(healthy, 2d);
+        decision = governor.Evaluate(new GovernorSample(3.1d, 16d, true, true, 2d), 4d);
+        Equal(GovernorReason.HardTalkyBudget, decision.Reason, "Hard pressure interrupts recovery probe");
+        Equal(PerformanceTier.FaceOnly, governor.CurrentTier, "Hard probe interruption commits protected tier");
+
+        governor = new AdaptivePerformanceGovernor(config, 0d);
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        governor.Evaluate(healthy, 2d);
+        decision = governor.Evaluate(
+            new GovernorSample(0.25d, 16d, true, true, double.NaN),
+            4d);
+        Equal(GovernorReason.InvalidProfile, decision.Reason, "Invalid probe duration freezes governor");
+        True(governor.IsFrozen, "Invalid probe duration enters fail-safe");
+        Equal(governor.CommittedTier, governor.CurrentTier, "Invalid probe duration rolls back provisional tier");
+    }
+
+    private static void TestGovernorFullRecoverySequence()
+    {
+        PerformanceConfig config = FastGovernorConfig();
+        config.RecoveryHealthySeconds = 2;
+        AdaptivePerformanceGovernor governor = new AdaptivePerformanceGovernor(config, 0d);
+        GovernorSample healthy = new GovernorSample(0.25d, 16d, true, true, 2d);
+
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 2d);
+        Equal(
+            PerformanceTier.FaceOnlyReducedRate,
+            governor.CommittedTier,
+            "Full recovery sequence starts at facial rate floor");
+
+        Config root = new Config
+        {
+            Performance = config,
+            EnabledSpectatorHeadMovements = true,
+        };
+        PerformanceTier[] restoredTiers =
+        {
+            PerformanceTier.FaceOnly,
+            PerformanceTier.NoGlancing,
+            PerformanceTier.Economy,
+            PerformanceTier.Full,
+        };
+
+        double now = 2d;
+        for (int tierIndex = 0; tierIndex < restoredTiers.Length; tierIndex++)
+        {
+            int guard = 0;
+            GovernorDecision decision;
+            do
+            {
+                now += 2d;
+                decision = governor.Evaluate(healthy, now);
+                guard++;
+                if (guard > 10)
+                    throw new InvalidOperationException("Recovery probe did not start in bounded time.");
+            }
+            while (!decision.Changed);
+
+            PerformanceTier target = restoredTiers[tierIndex];
+            Equal(target, governor.CurrentTier, "Recovery sequence probes expected next tier");
+            True(governor.IsRecoveryProbeActive, "Recovery sequence tier is provisional");
+
+            for (int probeWindow = 0; probeWindow < 5; probeWindow++)
+            {
+                now += 2d;
+                decision = governor.Evaluate(healthy, now);
+            }
+
+            Equal(
+                GovernorReason.RecoveryProbeSucceeded,
+                decision.Reason,
+                "Recovery sequence commits after ten seconds");
+            Equal(target, governor.CommittedTier, "Recovery sequence commits expected tier");
+
+            EffectivePerformancePolicy policy =
+                EffectivePerformancePolicy.Create(root, target);
+            switch (target)
+            {
+                case PerformanceTier.FaceOnly:
+                    True(!policy.HeadMovementEnabled, "FaceOnly recovery keeps head motion off");
+                    Near(1d / 20d, policy.FaceIntervalSeconds, 1e-7d, "FaceOnly restores economy face rate");
+                    break;
+                case PerformanceTier.NoGlancing:
+                    True(policy.HeadBobbingEnabled, "NoGlancing recovery restores head bob");
+                    True(!policy.GlancingEnabled, "NoGlancing recovery still suppresses glancing");
+                    break;
+                case PerformanceTier.Economy:
+                    True(policy.GlancingEnabled, "Economy recovery restores glancing");
+                    True(!policy.SpectatorHeadMovementsEnabled, "Economy recovery keeps spectator sync off");
+                    break;
+                case PerformanceTier.Full:
+                    True(policy.SpectatorHeadMovementsEnabled, "Full recovery restores configured spectator sync");
+                    Near(0.033d, policy.FaceIntervalSeconds, 1e-7d, "Full recovery restores configured face rate");
+                    break;
+            }
+        }
     }
 
     private static void TestProfiler()
@@ -750,6 +1008,11 @@ internal static class Program
             "Summary subsystem share");
         Equal(1L, summary.GetCounter(PerformanceCounter.VoicePackets), "Summary voice counter");
         Equal(10L, summary.GetCounter(PerformanceCounter.EmotionWrites), "Summary emotion counter");
+        summary.ObserveTier(PerformanceTier.Full);
+        summary.ObserveTier(PerformanceTier.Economy);
+        Equal(PerformanceTier.Full, summary.FirstObservedTier, "Summary first observed tier");
+        Equal(PerformanceTier.Economy, summary.LastObservedTier, "Summary last observed tier");
+        Equal(1L, summary.PolicyChangeCount, "Summary policy change count");
 
         string message = summary.CreateLogMessage(
             PerformanceMode.Automatic,
@@ -758,12 +1021,33 @@ internal static class Program
             GovernorReason.SoftTalkyBudget);
         True(message.Contains("effective_tier=Economy"), "Summary message effective tier");
         True(
+            message.Contains("observed_tier_span=Full->Economy, policy_changes=1"),
+            "Summary message identifies mixed-tier evidence");
+        True(
             message.Contains($"voice={0.5d:F3} ({100d / 44d:F1}%)"),
             "Summary message voice field");
         True(
             message.Contains($"profiler={11.5d:F3} ms/frame"),
             "Summary message monitoring field");
         True(message.Contains("sync_entries=7"), "Summary message counter values");
+        string probeMessage = summary.CreateLogMessage(
+            PerformanceMode.Automatic,
+            PerformanceTier.Full,
+            PerformanceTier.NoGlancing,
+            PerformanceTier.FaceOnly,
+            true,
+            GovernorReason.Recovery);
+        True(probeMessage.Contains("committed_tier=FaceOnly"), "Summary message committed tier");
+        True(probeMessage.Contains("recovery_probe=active"), "Summary message recovery probe state");
+        summary.ObserveTier(PerformanceTier.Full);
+        string roundTripMessage = summary.CreateLogMessage(
+            PerformanceMode.Automatic,
+            PerformanceTier.Full,
+            PerformanceTier.Full,
+            GovernorReason.Recovery);
+        True(
+            roundTripMessage.Contains("observed_tier_span=Full->Full, policy_changes=2"),
+            "Summary preserves round-trip policy changes");
 
         summary.Reset(200d);
         summary.RecordEligibleFrame(1, 0, 0, double.NaN, 0, false);
@@ -778,6 +1062,7 @@ internal static class Program
             breakdown = PerformanceBreakdown.FromWindow(window);
             summary.AddWindow(window, breakdown);
             summary.RecordEligibleFrame(10, 2, 3, 20d, 50, true);
+            summary.ObserveTier((PerformanceTier)(iteration % 2));
             _measurementSink += breakdown.SyncMilliseconds;
             _measurementSink += PerformanceMetricCatalog.DefaultSampleEvery(
                 (PerformanceMetric)(iteration % (int)PerformanceMetric.Count));
@@ -790,6 +1075,299 @@ internal static class Program
         Equal(0L, summary.FrameCount, "Summary reset clears frames");
         Near(0d, summary.GetSubsystemMilliseconds(PerformanceSubsystem.Sync), 0d, "Summary reset clears groups");
         Equal(0L, summary.GetCounter(PerformanceCounter.EmotionWrites), "Summary reset clears counters");
+        True(!summary.HasTierObservations, "Summary reset clears observed tier span");
+        Equal(0L, summary.PolicyChangeCount, "Summary reset clears policy change count");
+    }
+
+    private static void TestPerformanceTransitionTracker()
+    {
+        PerformanceProfiler profiler = new PerformanceProfiler(2, 60, 1000L, 0L);
+        PerformanceTransitionTracker tracker = new PerformanceTransitionTracker(30);
+        long timestamp = 0L;
+        PerformanceWindow window = null;
+        PerformanceBreakdown breakdown = default;
+
+        for (int index = 0; index < 5; index++)
+        {
+            double talky = index == 4 ? 2d : 1d;
+            window = CloseImpactWindow(profiler, ref timestamp, talky, 20d, 10, 2, 3);
+            breakdown = PerformanceBreakdown.FromWindow(window);
+            tracker.RecordWindow(
+                window,
+                breakdown,
+                PerformanceTier.Full,
+                true);
+        }
+
+        tracker.Start(
+            PerformanceTier.Full,
+            PerformanceTier.Economy,
+            GovernorReason.SoftTalkyBudget,
+            10d,
+            10);
+        True(tracker.IsActive, "Transition tracker starts observation");
+
+        for (int index = 0; index < 4; index++)
+        {
+            window = CloseImpactWindow(profiler, ref timestamp, 0.4d, 16d, 12, 3, 4);
+            breakdown = PerformanceBreakdown.FromWindow(window);
+            tracker.RecordWindow(
+                window,
+                breakdown,
+                PerformanceTier.Economy,
+                true);
+        }
+
+        True(
+            !tracker.TryComplete(18d, out _),
+            "Transition impact waits for ten complete post-change seconds");
+
+        window = CloseImpactWindow(profiler, ref timestamp, 0.4d, 16d, 12, 3, 4);
+        breakdown = PerformanceBreakdown.FromWindow(window);
+        tracker.RecordWindow(
+            window,
+            breakdown,
+            PerformanceTier.Economy,
+            true);
+
+        True(
+            tracker.TryComplete(20d, out PerformanceTransitionImpact impact),
+            "Transition impact completes at ten-second boundary");
+        Equal(1L, impact.Sequence, "Transition impact sequence");
+        Equal(PerformanceTier.Full, impact.FromTier, "Transition impact source tier");
+        Equal(PerformanceTier.Economy, impact.ToTier, "Transition impact target tier");
+        Equal(GovernorReason.SoftTalkyBudget, impact.TransitionReason, "Transition impact reason");
+        Equal(5L, impact.Before.WindowCount, "Transition impact before windows");
+        Equal(5L, impact.After.WindowCount, "Transition impact after windows");
+        True(impact.HasCompleteBaseline, "Transition impact has complete baseline");
+        True(impact.HasCompleteAfter, "Transition impact has complete after evidence");
+        Near(1.2d, impact.Before.TalkyMillisecondsPerFrame, 1e-9d, "Transition impact before Talky");
+        Near(0.4d, impact.After.TalkyMillisecondsPerFrame, 1e-9d, "Transition impact after Talky");
+        True(
+            impact.After.FrameP95Milliseconds < impact.Before.FrameP95Milliseconds,
+            "Transition impact merges lower post-change server p95");
+        Near(10d, impact.Before.AveragePlayers, 1e-9d, "Transition impact before population");
+        Near(12d, impact.After.AveragePlayers, 1e-9d, "Transition impact after population");
+        Near(10d, impact.Before.VoicePacketsPerSecond, 1e-9d, "Transition impact workload rate");
+        True(!tracker.IsActive, "Completed transition clears observation");
+        string impactMessage =
+            PerformanceTransitionReportFormatter.CreateLogMessage(new Config(), impact);
+        True(impactMessage.Contains("status=observed"), "Transition report outcome");
+        True(impactMessage.Contains("baseline=complete, after=complete"), "Transition report evidence state");
+        True(impactMessage.Contains("face_rate"), "Transition report names effective rate change");
+        True(impactMessage.Contains("talky=1.200->0.400"), "Transition report before/after cost");
+        True(impactMessage.Contains("observational"), "Transition report qualifies server delta");
+
+        Config reloadBefore = new Config();
+        Config reloadAfter = new Config
+        {
+            EnableReactionOnHurt = false,
+            EnableEmoteOnConsumables = false,
+        };
+        string reloadChanges = PerformanceTransitionReportFormatter.DescribePolicyChanges(
+            EffectivePerformancePolicy.Create(reloadBefore, PerformanceTier.Full),
+            EffectivePerformancePolicy.Create(reloadAfter, PerformanceTier.Full));
+        True(
+            reloadChanges.Contains("face_reactions on->off"),
+            "Policy diff reports reaction-only reload changes");
+        True(
+            reloadChanges.Contains("consumable_emotes on->off"),
+            "Policy diff reports consumable-only reload changes");
+
+        tracker.Start(
+            PerformanceTier.Economy,
+            PerformanceTier.NoGlancing,
+            GovernorReason.Recovery,
+            20d,
+            10);
+        for (int index = 0; index < 4; index++)
+        {
+            window = CloseImpactWindow(profiler, ref timestamp, 0.3d, 15d, 12, 2, 2);
+            breakdown = PerformanceBreakdown.FromWindow(window);
+            tracker.RecordWindow(
+                window,
+                breakdown,
+                PerformanceTier.NoGlancing,
+                true);
+        }
+
+        window = CloseImpactWindow(profiler, ref timestamp, 0.3d, 15d, 0, 0, 0);
+        breakdown = PerformanceBreakdown.FromWindow(window);
+        tracker.RecordWindow(
+            window,
+            breakdown,
+            PerformanceTier.NoGlancing,
+            false);
+
+        for (int index = 0; index < 4; index++)
+        {
+            window = CloseImpactWindow(profiler, ref timestamp, 0.3d, 15d, 11, 2, 2);
+            breakdown = PerformanceBreakdown.FromWindow(window);
+            tracker.RecordWindow(
+                window,
+                breakdown,
+                PerformanceTier.NoGlancing,
+                true);
+        }
+
+        True(
+            !tracker.TryComplete(38d, out _),
+            "Ineligible transition window resets post-change evidence");
+        window = CloseImpactWindow(profiler, ref timestamp, 0.3d, 15d, 11, 2, 2);
+        breakdown = PerformanceBreakdown.FromWindow(window);
+        tracker.RecordWindow(
+            window,
+            breakdown,
+            PerformanceTier.NoGlancing,
+            true);
+        True(
+            tracker.TryFinish(
+                40d,
+                PerformanceImpactOutcome.RecoveryAccepted,
+                GovernorReason.RecoveryProbeSucceeded,
+                out impact),
+            "Transition tracker returns explicitly accepted recovery");
+        Equal(5L, impact.After.WindowCount, "Only fresh eligible windows survive reset");
+        Equal(PerformanceImpactOutcome.RecoveryAccepted, impact.Outcome, "Recovery impact outcome");
+        Equal(
+            GovernorReason.RecoveryProbeSucceeded,
+            impact.CompletionReason,
+            "Recovery impact completion reason");
+
+        PerformanceProfiler reuseProfiler =
+            new PerformanceProfiler(1, 2, 1000L, 0L);
+        PerformanceTransitionTracker reuseTracker =
+            new PerformanceTransitionTracker(4);
+        long reuseTimestamp = 0L;
+        for (int index = 1; index <= 4; index++)
+        {
+            PerformanceWindow reuseWindow = CloseImpactWindow(
+                reuseProfiler,
+                ref reuseTimestamp,
+                index,
+                10d,
+                8,
+                1,
+                1);
+            reuseTracker.RecordWindow(
+                reuseWindow,
+                PerformanceBreakdown.FromWindow(reuseWindow),
+                PerformanceTier.Full,
+                true);
+        }
+
+        reuseTracker.Start(
+            PerformanceTier.Full,
+            PerformanceTier.Economy,
+            GovernorReason.SoftTalkyBudget,
+            8d,
+            10);
+        PerformanceWindow reuseAfter = CloseImpactWindow(
+            reuseProfiler,
+            ref reuseTimestamp,
+            0.5d,
+            9d,
+            8,
+            1,
+            1);
+        reuseTracker.RecordWindow(
+            reuseAfter,
+            PerformanceBreakdown.FromWindow(reuseAfter),
+            PerformanceTier.Economy,
+            true);
+        True(
+            reuseTracker.TryFinish(
+                10d,
+                PerformanceImpactOutcome.Interrupted,
+                GovernorReason.HardTalkyBudget,
+                out PerformanceTransitionImpact reuseImpact),
+            "Transition tracker finishes after profiler ring reuse");
+        Equal(2L, reuseImpact.Before.WindowCount, "Tracker excludes invalidated profiler slots");
+        Near(3.5d, reuseImpact.Before.TalkyMillisecondsPerFrame, 1e-9d, "Tracker copied valid baseline before reuse");
+        double copiedBaseline = reuseImpact.Before.TalkyMillisecondsPerFrame;
+        for (int index = 0; index < 4; index++)
+        {
+            reuseAfter = CloseImpactWindow(
+                reuseProfiler,
+                ref reuseTimestamp,
+                9d,
+                30d,
+                1,
+                0,
+                0);
+        }
+        Near(
+            copiedBaseline,
+            reuseImpact.Before.TalkyMillisecondsPerFrame,
+            0d,
+            "Completed impact remains stable after profiler slot reuse");
+
+        tracker.Reset();
+        tracker.RecordWindow(
+            window,
+            breakdown,
+            PerformanceTier.NoGlancing,
+            true);
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int iteration = 0; iteration < 10000; iteration++)
+        {
+            tracker.RecordWindow(
+                window,
+                breakdown,
+                PerformanceTier.NoGlancing,
+                true);
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Equal(0L, allocated, "Transition window recording steady-state allocation");
+
+        tracker.Start(
+            PerformanceTier.NoGlancing,
+            PerformanceTier.FaceOnly,
+            GovernorReason.SoftTalkyBudget,
+            40d,
+            10);
+        tracker.RecordWindow(
+            window,
+            breakdown,
+            PerformanceTier.FaceOnly,
+            true);
+        allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int iteration = 0; iteration < 1000; iteration++)
+        {
+            tracker.RecordWindow(
+                window,
+                breakdown,
+                PerformanceTier.FaceOnly,
+                true);
+        }
+        allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Equal(0L, allocated, "Active transition accumulation steady-state allocation");
+    }
+
+    private static PerformanceWindow CloseImpactWindow(
+        PerformanceProfiler profiler,
+        ref long timestamp,
+        double talkyMillisecondsPerFrame,
+        double frameMilliseconds,
+        int players,
+        int recentSpeakers,
+        int activeLooks)
+    {
+        const int frameCount = 10;
+        long talkyTicks = (long)Math.Round(talkyMillisecondsPerFrame * frameCount);
+        profiler.RecordDurationTicks(PerformanceMetric.VoicePacket, talkyTicks);
+        profiler.Increment(PerformanceCounter.VoicePackets, 20L);
+        profiler.Increment(PerformanceCounter.TrackedPlayers, players * frameCount);
+        profiler.Increment(PerformanceCounter.RecentSpeakers, recentSpeakers * frameCount);
+        profiler.Increment(PerformanceCounter.ActiveLookTargets, activeLooks * frameCount);
+        profiler.Increment(PerformanceCounter.SyncEntries, 100L);
+        profiler.Increment(PerformanceCounter.Rewrites, 5L);
+        for (int frame = 0; frame < frameCount; frame++)
+            profiler.RecordFrameMilliseconds(frameMilliseconds);
+
+        timestamp += 2000L;
+        True(profiler.TryCloseWindow(timestamp, out PerformanceWindow window), "Impact source window closes");
+        return window;
     }
 
     private static bool IsRecentSpeech(double lastPacketSeconds, double nowSeconds, double durationMilliseconds)
@@ -951,6 +1529,7 @@ internal static class Program
             TransitionCooldownSeconds = 0,
             RecoveryCooldownSeconds = 0,
             RecoveryHealthySeconds = 4,
+            RecoveryProbeSeconds = 10,
             EvaluationWindowSeconds = 2,
             ConsecutiveBreachWindows = 3,
             EmergencyBreachWindows = 2,

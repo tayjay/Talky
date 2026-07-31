@@ -27,6 +27,8 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     private EffectivePerformancePolicy _currentPolicy;
     private readonly PerformanceSummaryAccumulator _summary =
         new PerformanceSummaryAccumulator();
+    private readonly PerformanceTransitionTracker _transitions =
+        new PerformanceTransitionTracker();
 
     private double _lastNowSeconds;
     private bool _hasTimeOrigin;
@@ -67,6 +69,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _lastTransitionReason = InitialReason(_governor.Settings);
         ResetWindowGate();
         _summary.Reset(_lastNowSeconds);
+        _transitions.Reset();
     }
 
     /// <summary>
@@ -270,11 +273,20 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             return;
         }
 
+        PerformanceBreakdown breakdown = PerformanceBreakdown.FromWindow(window);
+        PerformanceTier observedTier = Tier;
+        _transitions.RecordWindow(
+            window,
+            breakdown,
+            observedTier,
+            serverHealthEligible);
+
         GovernorSample sample = new GovernorSample(
             window.TalkyMillisecondsPerFrame,
             window.FrameP95Milliseconds,
             serverHealthEligible,
-            true);
+            true,
+            window.DurationSeconds);
 
         long governorStarted = Stopwatch.GetTimestamp();
         GovernorDecision decision = _governor.Evaluate(sample, _lastNowSeconds);
@@ -282,7 +294,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         if (governorTicks > 0L)
             _profiler.RecordDurationTicks(PerformanceMetric.Governor, governorTicks);
 
-        PerformanceBreakdown breakdown = PerformanceBreakdown.FromWindow(window);
+        FinishTransitionImpact(decision);
         if (decision.Changed)
         {
             RefreshCurrentPolicy();
@@ -294,6 +306,16 @@ public sealed class TalkyPerformanceMonitor : IDisposable
                 players,
                 recentSpeakers,
                 activeLooks);
+            _transitions.Start(
+                decision.PreviousTier,
+                decision.CurrentTier,
+                decision.Reason,
+                _lastNowSeconds,
+                _governor.Settings.RecoveryProbeSeconds);
+        }
+        else if (decision.Reason == GovernorReason.RecoveryProbeSucceeded)
+        {
+            _lastTransitionReason = decision.Reason;
         }
         else if (decision.PressureAtFloor &&
                  _lastNowSeconds - _lastFloorWarningAt >= FloorWarningIntervalSeconds)
@@ -307,6 +329,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
                 "Voice-driven facial animation remains enabled.");
         }
 
+        _summary.ObserveTier(observedTier);
         _summary.AddWindow(window, breakdown);
         TryLogSummary(_lastNowSeconds);
     }
@@ -318,6 +341,12 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         if (_disposed)
             return;
 
+        EffectivePerformancePolicy previousPolicy = _currentPolicy;
+        PerformanceMode previousMode = _governor.Settings.Mode;
+        PerformanceTier previousTier = Tier;
+        PerformanceTier previousCommittedTier = _governor.CommittedTier;
+        bool previousProbeActive = _governor.IsRecoveryProbeActive;
+
         _config = config;
         _frozen = false;
         _failureLogged = false;
@@ -325,6 +354,12 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _profilingEnabled = _governor.Settings.Mode != PerformanceMode.Disabled;
         RefreshCurrentPolicy();
         _lastTransitionReason = InitialReason(_governor.Settings);
+        LogConfigurationReload(
+            previousPolicy,
+            previousMode,
+            previousTier,
+            previousCommittedTier,
+            previousProbeActive);
 
         // Configuration reload is a cold path. Reset in place when dimensions are unchanged;
         // replace only when the configured window size changes.
@@ -335,6 +370,8 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             _profiler = new PerformanceProfiler(windowSeconds, HistorySeconds);
         ResetWindowGate();
         _summary.Reset(_lastNowSeconds);
+        _transitions.Reset();
+        ResetDiagnosticSnapshots();
     }
 
     /// <summary>
@@ -350,6 +387,9 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _profiler.Reset();
         ResetWindowGate();
         _summary.Reset(_lastNowSeconds);
+        _transitions.Reset();
+        _lastTransitionReason = InitialReason(_governor.Settings);
+        ResetDiagnosticSnapshots();
     }
 
     public void Freeze()
@@ -369,6 +409,35 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         _disposed = true;
         FreezeInternal("monitor disposed");
+    }
+
+    private void LogConfigurationReload(
+        EffectivePerformancePolicy previousPolicy,
+        PerformanceMode previousMode,
+        PerformanceTier previousTier,
+        PerformanceTier previousCommittedTier,
+        bool previousProbeActive)
+    {
+        string changes = previousPolicy == null
+            ? "unavailable"
+            : PerformanceTransitionReportFormatter.DescribePolicyChanges(
+                previousPolicy,
+                _currentPolicy);
+        PerformanceConfig settings = _governor.Settings;
+
+        Logger.Info(
+            $"Talky performance configuration reloaded: " +
+            $"mode={previousMode}->{settings.Mode}, " +
+            $"effective_tier={previousTier}->{Tier}, " +
+            $"committed_tier={previousCommittedTier}->{_governor.CommittedTier}, " +
+            $"recovery_probe={(previousProbeActive ? "cancelled" : "none")}, " +
+            $"changes=[{changes}], window={settings.EvaluationWindowSeconds}s, " +
+            $"probe={settings.RecoveryProbeSeconds}s, " +
+            $"talky_budget={settings.TalkyBudgetMsPerFrame:F3}/" +
+            $"{settings.HardTalkyBudgetMsPerFrame:F3} ms/frame, " +
+            $"server_p95_recover/degrade/emergency=" +
+            $"{settings.ServerP95RecoveryMs:F2}/{settings.ServerP95DegradeMs:F2}/" +
+            $"{settings.ServerP95EmergencyMs:F2} ms.");
     }
 
     private static PerformanceProfiler CreateProfiler(Config config)
@@ -403,10 +472,81 @@ public sealed class TalkyPerformanceMonitor : IDisposable
                 _governor.Settings.Mode,
                 configuredTier,
                 Tier,
+                _governor.CommittedTier,
+                _governor.IsRecoveryProbeActive,
                 _lastTransitionReason));
         }
 
         _summary.Reset(nowSeconds);
+    }
+
+    private void FinishTransitionImpact(GovernorDecision decision)
+    {
+        if (!_transitions.IsActive)
+            return;
+
+        PerformanceTransitionImpact impact;
+        if (_transitions.IsRecoveryObservation)
+        {
+            if (decision.Reason == GovernorReason.RecoveryProbeSucceeded)
+            {
+                if (_transitions.TryFinish(
+                        _lastNowSeconds,
+                        PerformanceImpactOutcome.RecoveryAccepted,
+                        decision.Reason,
+                        out impact))
+                {
+                    LogTransitionImpact(impact);
+                }
+            }
+            else if (decision.Changed &&
+                     _transitions.TryFinish(
+                         _lastNowSeconds,
+                         PerformanceImpactOutcome.RecoveryRejected,
+                         decision.Reason,
+                         out impact))
+            {
+                LogTransitionImpact(impact);
+            }
+
+            return;
+        }
+
+        if (_transitions.TryComplete(_lastNowSeconds, out impact))
+        {
+            LogTransitionImpact(impact);
+            return;
+        }
+
+        if (decision.Changed &&
+            _transitions.TryFinish(
+                _lastNowSeconds,
+                PerformanceImpactOutcome.Interrupted,
+                decision.Reason,
+                out impact))
+        {
+            LogTransitionImpact(impact);
+        }
+    }
+
+    private void LogTransitionImpact(PerformanceTransitionImpact impact)
+    {
+        string message =
+            PerformanceTransitionReportFormatter.CreateLogMessage(_config, impact);
+
+        if (!impact.Before.HasData ||
+            !impact.After.HasData ||
+            !impact.HasCompleteBaseline ||
+            !impact.HasCompleteAfter ||
+            impact.Outcome == PerformanceImpactOutcome.RecoveryRejected ||
+            impact.Outcome == PerformanceImpactOutcome.Interrupted)
+        {
+            Logger.Warn(message);
+        }
+        else
+        {
+            Logger.Info(message);
+        }
     }
 
     private void LogTransition(
@@ -428,7 +568,10 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             : 0d;
         Logger.Warn(
             $"Talky performance tier {decision.PreviousTier} -> {decision.CurrentTier}: " +
-            $"{decision.Reason}; talky={window.TalkyMillisecondsPerFrame:F3} ms/frame, " +
+            $"{decision.Reason}; state=" +
+            $"{(_governor.IsRecoveryProbeActive ? "probe" : "committed")}, " +
+            $"committed_tier={_governor.CommittedTier}, " +
+            $"talky={window.TalkyMillisecondsPerFrame:F3} ms/frame, " +
             $"{window.TalkyMillisecondsPerSecond:F2} ms/s, " +
             $"server_p50/p95/p99={window.FrameP50Milliseconds:F2}/" +
             $"{window.FrameP95Milliseconds:F2}/{window.FrameP99Milliseconds:F2} ms, " +
@@ -448,6 +591,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _frozen = true;
         _profilingEnabled = false;
         _governor?.Freeze(reason);
+        _transitions.Reset();
         if (_config != null && _governor != null)
             RefreshCurrentPolicy();
     }
@@ -461,7 +605,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _failureLogged = true;
         Logger.Warn(
             $"Talky performance monitor froze after {reason}. " +
-            "The current tier is retained; reload the configuration to retry profiling.");
+            "The committed tier is retained; reload the configuration to retry profiling.");
     }
 
     private void ObserveTime(double nowSeconds)
@@ -478,6 +622,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             RefreshCurrentPolicy();
             _lastTransitionReason = InitialReason(_governor.Settings);
             _summary.Reset(nowSeconds);
+            _transitions.Reset();
             return;
         }
 
@@ -509,6 +654,13 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     {
         _windowHasFrames = false;
         _windowHealthEligible = false;
+    }
+
+    private void ResetDiagnosticSnapshots()
+    {
+        _latestSmoothDeltaMilliseconds = 0d;
+        _latestServerTickrate = 0;
+        _lastFloorWarningAt = double.NegativeInfinity;
     }
 
     private static long NonNegative(int value)

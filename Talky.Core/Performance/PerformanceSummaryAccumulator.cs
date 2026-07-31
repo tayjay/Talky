@@ -26,6 +26,10 @@ public sealed class PerformanceSummaryAccumulator
     private long _players;
     private long _recentSpeakers;
     private long _activeLooks;
+    private bool _hasTierObservations;
+    private PerformanceTier _firstObservedTier;
+    private PerformanceTier _lastObservedTier;
+    private long _policyChanges;
 
     public double StartedAt { get; private set; }
     public long WindowCount => _windows;
@@ -61,6 +65,31 @@ public sealed class PerformanceSummaryAccumulator
     }
     public double TargetTickrate =>
         _smoothSamples > 0L ? _targetTickrate / _smoothSamples : 0d;
+    public bool HasTierObservations => _hasTierObservations;
+    public PerformanceTier FirstObservedTier => _firstObservedTier;
+    public PerformanceTier LastObservedTier => _lastObservedTier;
+    public long PolicyChangeCount => _policyChanges;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ObserveTier(PerformanceTier tier)
+    {
+        if (tier < PerformanceTier.Full || tier > PerformanceTier.FaceOnlyReducedRate)
+            throw new ArgumentOutOfRangeException(nameof(tier));
+
+        if (!_hasTierObservations)
+        {
+            _hasTierObservations = true;
+            _firstObservedTier = tier;
+            _lastObservedTier = tier;
+            return;
+        }
+
+        if (_lastObservedTier != tier)
+        {
+            _lastObservedTier = tier;
+            _policyChanges++;
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void RecordEligibleFrame(
@@ -138,9 +167,38 @@ public sealed class PerformanceSummaryAccumulator
         PerformanceTier effectiveTier,
         GovernorReason lastTransitionReason)
     {
+        return CreateLogMessage(
+            mode,
+            configuredTier,
+            effectiveTier,
+            effectiveTier,
+            false,
+            lastTransitionReason);
+    }
+
+    public string CreateLogMessage(
+        PerformanceMode mode,
+        PerformanceTier configuredTier,
+        PerformanceTier effectiveTier,
+        PerformanceTier committedTier,
+        bool recoveryProbeActive,
+        GovernorReason lastTransitionReason)
+    {
+        string observedTierSpan = !_hasTierObservations
+            ? "unavailable"
+            : _policyChanges == 0L
+                ? _firstObservedTier.ToString()
+                : $"{_firstObservedTier}->{_lastObservedTier}";
+        long policyChanges = _policyChanges;
+        if (_hasTierObservations && _lastObservedTier != effectiveTier)
+            policyChanges++;
+
         return
             $"Talky performance summary: mode={mode}, " +
             $"configured_tier={configuredTier}, effective_tier={effectiveTier}, " +
+            $"committed_tier={committedTier}, " +
+            $"recovery_probe={(recoveryProbeActive ? "active" : "none")}, " +
+            $"observed_tier_span={observedTierSpan}, policy_changes={policyChanges}, " +
             $"last_trigger={lastTransitionReason}, windows={WindowCount}, " +
             $"talky={TalkyMillisecondsPerFrame:F3} ms/frame " +
             $"({TalkyMillisecondsPerSecond:F2} ms/s), " +
@@ -188,6 +246,10 @@ public sealed class PerformanceSummaryAccumulator
         _players = 0L;
         _recentSpeakers = 0L;
         _activeLooks = 0L;
+        _hasTierObservations = false;
+        _firstObservedTier = PerformanceTier.Full;
+        _lastObservedTier = PerformanceTier.Full;
+        _policyChanges = 0L;
         Array.Clear(_subsystemMilliseconds, 0, _subsystemMilliseconds.Length);
         Array.Clear(_counters, 0, _counters.Length);
         _frameHistogram.Reset();

@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Talky.Performance;
+using Talky.Voice;
 
 namespace Talky.Benchmarks;
 
@@ -23,6 +24,8 @@ internal static class Program
 
         float[] packet = CreatePacket();
         RunRmsBenchmark(packet);
+        Console.WriteLine();
+        RunSpeechPercentileBenchmark();
         Console.WriteLine();
         RunGlanceBenchmark();
         Console.WriteLine();
@@ -72,6 +75,48 @@ internal static class Program
         Console.WriteLine("  Measured speedup : {0,10:N2}x", legacyMs / Math.Max(rollingMs, double.Epsilon));
         Console.WriteLine("  Typical continuous speech: legacy 144,000 squares/s at 30 evaluations/s;");
         Console.WriteLine("                             rolling 48,000 squares/s at 100 x 480-sample packets/s");
+    }
+
+    private static void RunSpeechPercentileBenchmark()
+    {
+        const int observations = 100000;
+        RollingSpeechPercentiles percentiles = new RollingSpeechPercentiles();
+        for (int i = 0; i < percentiles.Capacity * 2; i++)
+            percentiles.Observe(-80d + i % 50);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < observations; i++)
+        {
+            percentiles.Observe(-85d + i % 70);
+            _sink += percentiles.AnimationLowDecibels;
+            _sink += percentiles.AnimationHighDecibels;
+        }
+
+        stopwatch.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        double microsecondsPerObservation =
+            stopwatch.Elapsed.TotalMilliseconds * 1000d / observations;
+
+        Console.WriteLine(
+            "Rolling speech percentiles: {0:N0} observations ({1}-sample player window)",
+            observations,
+            percentiles.Capacity);
+        Console.WriteLine(
+            "  Total             : {0,10:N2} ms",
+            stopwatch.Elapsed.TotalMilliseconds);
+        Console.WriteLine(
+            "  Average           : {0,10:N3} us/observation",
+            microsecondsPerObservation);
+        Console.WriteLine(
+            "  Steady allocation : {0,10:N0} B",
+            allocated);
+        Console.WriteLine(
+            "  Production cadence: 10 observations/s per continuously speaking player");
     }
 
     private static void RunGlanceBenchmark()

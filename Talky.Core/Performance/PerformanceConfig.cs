@@ -69,6 +69,9 @@ public sealed class PerformanceConfig
     [Description("Minimum healthy probation in seconds after any recovery transition.")]
     public int RecoveryCooldownSeconds { get; set; } = 60;
 
+    [Description("Eligible seconds to observe a restored tier before keeping it (10-60). An over-budget probe is rolled back.")]
+    public int RecoveryProbeSeconds { get; set; } = 10;
+
     [Description("Maximum face evaluation rate in Economy and lower tiers.")]
     public int EconomyFaceHz { get; set; } = 20;
 
@@ -103,6 +106,7 @@ public sealed class PerformanceConfig
             RecoveryHealthySeconds = RecoveryHealthySeconds,
             RecoveryBudgetRatio = RecoveryBudgetRatio,
             RecoveryCooldownSeconds = RecoveryCooldownSeconds,
+            RecoveryProbeSeconds = RecoveryProbeSeconds,
             EconomyFaceHz = EconomyFaceHz,
             EconomyGlanceHz = EconomyGlanceHz,
             EconomyLookHz = EconomyLookHz,
@@ -204,6 +208,9 @@ public static class PerformanceConfigValidator
         value.RecoveryCooldownSeconds = Clamp(
             value.RecoveryCooldownSeconds, 0, 3600, 60,
             nameof(value.RecoveryCooldownSeconds), ref summary, ref corrections);
+        value.RecoveryProbeSeconds = Clamp(
+            value.RecoveryProbeSeconds, 10, 60, 10,
+            nameof(value.RecoveryProbeSeconds), ref summary, ref corrections);
 
         value.EconomyFaceHz = Clamp(
             value.EconomyFaceHz, 15, 120, 20,

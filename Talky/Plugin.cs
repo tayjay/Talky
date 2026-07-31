@@ -233,33 +233,71 @@ public class Plugin : Plugin<Config>
         }
     }
         
-    public bool CheckCedMod()
+    private bool CheckCedMod()
     {
-        foreach(var cedModAssembly in AppDomain.CurrentDomain.GetAssemblies().Where(assembly => assembly.GetName().Name.StartsWith("CedMod")))
+        var cedMod = PluginLoader.EnabledPlugins.FirstOrDefault(
+            plugin => plugin.GetType().FullName == "CedMod.CedModMain");
+        
+        if (cedMod == null) return false;
+
+        if (!TryGetPropertyPath(
+                cedMod,
+                out bool disableFakeSyncing,
+                "Config",
+                "CedMod",
+                "DisableFakeSyncing"))
         {
-            var cedModMainType = cedModAssembly.GetTypes().FirstOrDefault(type => type.FullName == "CedMod.CedModMain");
-            if (cedModMainType == null) continue;
-        
-            // Get the Singleton instance of CedMod
-            var singletonField = cedModMainType.GetField("Singleton");
-            var cedModInstance = singletonField.GetValue(null);
-            // Get Config property
-            var configProperty = cedModMainType.GetProperty("Config");
-            var config = configProperty.GetValue(cedModInstance);
-            // Get CedModConfig property
-            var cedModConfigType = config.GetType();
-            var cedModConfigProperty = cedModConfigType.GetProperty("CedMod");
-            var cedModConfig = cedModConfigProperty.GetValue(config);
-            // Get value of DisableFakeSyncing
-            var disableFakeSyncingProperty = cedModConfig.GetType().GetProperty("DisableFakeSyncing");
-            var disableFakeSyncingValue = (bool)disableFakeSyncingProperty.GetValue(cedModConfig);
-            if (!disableFakeSyncingValue)
-            {
-                Logger.Warn("Applying CedMod workaround patch...");
-                return true;
-            }
+            return false;
         }
-        
+
+        if (!disableFakeSyncing)
+        {
+            Logger.Warn("Applying CedMod workaround patch...");
+            return true;
+        }
+
+        if (ExiledBridge.ExiledPresent())
+            return ExiledBridge.CheckCedModExiled();
+
+        return false;
+
+    }
+
+    private static bool TryGetPropertyPath<T>(
+        object root,
+        out T value,
+        params string[] path)
+    {
+        object current = root;
+
+        foreach (string memberName in path)
+        {
+            if (current == null)
+            {
+                value = default;
+                return false;
+            }
+
+            PropertyInfo property = current.GetType().GetProperty(
+                memberName,
+                BindingFlags.Instance | BindingFlags.Public);
+
+            if (property == null || property.GetIndexParameters().Length != 0)
+            {
+                value = default;
+                return false;
+            }
+
+            current = property.GetValue(current);
+        }
+
+        if (current is T typed)
+        {
+            value = typed;
+            return true;
+        }
+
+        value = default;
         return false;
     }
 

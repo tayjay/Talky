@@ -5,10 +5,10 @@ namespace Talky.Settings;
 
 public class Config
 {
-    [Description("Low dB threshold for voice activation. If the dB level is below this value, the player will show their mouth closed.")]
+    [Description("Speech activity floor and fallback low threshold while a player's rolling range warms up.")]
     public double LowDbThreshold { get; set; } = -80.0;
 
-    [Description("High dB threshold for voice activation. If the dB level is above this value, the player will show their mouth fully open.")]
+    [Description("Fallback high dB threshold used while a player's rolling speech range warms up.")]
     public double HighDbThreshold { get; set; } = -30.0;
 
     [Description("Time in milliseconds for the mouth to reset to default after the player stops talking. Default is 500ms.")]

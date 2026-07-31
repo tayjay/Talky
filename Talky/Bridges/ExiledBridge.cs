@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using LabApi.Features.Console;
 
@@ -14,6 +15,70 @@ internal static class ExiledBridge
     {
         return AppDomain.CurrentDomain.GetAssemblies().Any(assembly =>
             assembly.GetName().Name.Equals("Exiled.Loader", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool CheckCedModExiled()
+    {
+        if(!ExiledPresent()) return false;
+        
+        var cedMod = Exiled.Loader.Loader.Plugins.FirstOrDefault(
+            plugin => plugin.GetType().FullName == "CedMod.CedModMain");
+        
+        if (cedMod == null) return false;
+
+        if (!TryGetPropertyPath(
+                cedMod,
+                out bool disableFakeSyncing,
+                "Config",
+                "CedMod",
+                "DisableFakeSyncing"))
+        {
+            return false;
+        }
+
+        if (!disableFakeSyncing)
+            Logger.Warn("Applying CedMod workaround patch for Exiled...");
+
+        return !disableFakeSyncing;
+    }
+    
+    private static bool TryGetPropertyPath<T>(
+        object root,
+        out T value,
+        params string[] path)
+    {
+        object current = root;
+
+        foreach (string memberName in path)
+        {
+            if (current == null)
+            {
+                value = default;
+                return false;
+            }
+
+            PropertyInfo property = current.GetType().GetProperty(
+                memberName,
+                BindingFlags.Instance | BindingFlags.Public);
+
+            if (property == null || property.GetIndexParameters().Length != 0)
+            {
+                value = default;
+                return false;
+            }
+
+            current = property.GetValue(current);
+        }
+
+        if (current is T typed)
+        {
+            value = typed;
+            return true;
+        }
+
+        value = default;
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

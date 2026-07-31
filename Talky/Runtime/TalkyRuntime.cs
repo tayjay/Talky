@@ -261,7 +261,7 @@ public sealed class TalkyRuntime : IDisposable
             float now = Time.time;
             _voicePackets++;
             monitor?.Count(PerformanceCounter.VoicePackets);
-            int decoded = source.DecodeVoicePacket(data, length);
+            int decoded = source.DecodeVoicePacket(data, length, now);
             if (decoded <= 0)
                 return;
 
@@ -271,7 +271,7 @@ public sealed class TalkyRuntime : IDisposable
             if (!target.PresentVoiceFrom(source, decoded, now))
                 return;
 
-            if (_policy.EnableGlancing)
+            if (_policy.EnableGlancing && target.LastPresentedVoiceWasAudible)
                 AddRecentSpeaker(target);
         }
         finally

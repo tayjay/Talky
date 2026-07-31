@@ -17,8 +17,14 @@ namespace Talky.Behaviours;
 /// </summary>
 public sealed class SpeechTracker : MonoBehaviour
 {
-    private readonly RollingVoiceEnergy _energy = new RollingVoiceEnergy(4800);
+    private const int SpeechRangeObservationSamples = RollingVoiceEnergy.DefaultCapacity;
+    private const float SpeechRangeContinuityGapSeconds = 0.25f;
+    private const float MinimumAdaptiveVolumeRatio = 0.15f;
+
+    private readonly RollingVoiceEnergy _energy = new RollingVoiceEnergy();
     private readonly float[] _samples = new float[480];
+    private readonly RollingSpeechPercentiles _speechPercentiles =
+        new RollingSpeechPercentiles();
     private readonly VoicePresentationState _voicePresentation =
         new VoicePresentationState();
 
@@ -30,6 +36,10 @@ public sealed class SpeechTracker : MonoBehaviour
     private bool _hasAppliedPreset;
     private bool _shouldAnimateFace = true;
     private bool _disposed;
+    private SpeechObservationCadence _speechRangeCadence =
+        new SpeechObservationCadence(SpeechRangeObservationSamples);
+    private float _lastSourcePacketTime = -1f;
+    private AudibleSpeechActivity _audibleSpeechActivity;
 
     internal int RuntimeIndex { get; set; } = -1;
     internal int RecentSpeakerIndex { get; set; } = -1;
@@ -37,6 +47,8 @@ public sealed class SpeechTracker : MonoBehaviour
     internal bool HasGlanceSnapshot { get; private set; }
     internal Vector3 GlancePosition { get; private set; }
     internal Vector3 GlanceCameraPosition { get; private set; }
+    internal bool LastPresentedVoiceWasAudible =>
+        _audibleSpeechActivity.LastObservationWasAudible;
 
     public Player Player => _player;
     public ReferenceHub Hub => _player?.ReferenceHub;
@@ -49,6 +61,10 @@ public sealed class SpeechTracker : MonoBehaviour
     }
     public float CurrentVolumeRatio { get; private set; }
     public double RootMeanSquare => _energy.RootMeanSquare;
+    public bool HasRollingSpeechRange => _speechPercentiles.IsReady;
+    public int RollingSpeechObservationCount => _speechPercentiles.Count;
+    public double RollingLowDecibels => _speechPercentiles.LowPercentileDecibels;
+    public double RollingHighDecibels => _speechPercentiles.HighPercentileDecibels;
 
     public bool ShouldAnimateFace
     {
@@ -134,7 +150,9 @@ public sealed class SpeechTracker : MonoBehaviour
         LastPacketTime = -1f;
         CurrentVolumeRatio = 0f;
         _energy.Reset();
+        ResetSpeechRangeObservationWindow();
         _voicePresentation.Reset();
+        ResetAudibleSpeech();
         CaptureGlanceSnapshot();
     }
 
@@ -187,25 +205,32 @@ public sealed class SpeechTracker : MonoBehaviour
 
             double rms = _voicePresentation.RootMeanSquare;
             double dbVolume = rms > 0d ? 20d * Math.Log10(rms) : double.NegativeInfinity;
+            bool hasAdaptiveRange = _voicePresentation.HasAdaptiveRange;
+            double fallbackLow = NormalizeSpeechFloor(lowThreshold);
+            double fallbackHigh = NormalizeSpeechCeiling(highThreshold, fallbackLow);
+            SpeechAnimationDecision animation = SpeechAnimationMath.Evaluate(
+                dbVolume,
+                fallbackLow,
+                fallbackHigh,
+                hasAdaptiveRange,
+                _voicePresentation.PercentileLowDecibels,
+                _voicePresentation.PercentileHighDecibels,
+                _voicePresentation.AnimationLowDecibels,
+                _voicePresentation.AnimationHighDecibels,
+                MinimumAdaptiveVolumeRatio);
+            CurrentVolumeRatio = animation.VolumeRatio;
             SpeechLevel level;
-
-            if (dbVolume < lowThreshold)
+            switch (animation.Level)
             {
-                level = SpeechLevel.Silent;
-                CurrentVolumeRatio = 0f;
-            }
-            else if (dbVolume >= highThreshold)
-            {
-                level = SpeechLevel.Loud;
-                CurrentVolumeRatio = 1f;
-            }
-            else
-            {
-                level = SpeechLevel.Quiet;
-                double thresholdSpan = highThreshold - lowThreshold;
-                CurrentVolumeRatio = thresholdSpan > 0d
-                    ? Mathf.Clamp01((float)((dbVolume - lowThreshold) / thresholdSpan))
-                    : 1f;
+                case SpeechAnimationLevel.Silent:
+                    level = SpeechLevel.Silent;
+                    break;
+                case SpeechAnimationLevel.Loud:
+                    level = SpeechLevel.Loud;
+                    break;
+                default:
+                    level = SpeechLevel.Quiet;
+                    break;
             }
 
             if (level == _lastLevel)
@@ -244,11 +269,11 @@ public sealed class SpeechTracker : MonoBehaviour
         }
 
         float now = Time.time;
-        int decoded = DecodeVoicePacket(data, length);
+        int decoded = DecodeVoicePacket(data, length, now);
         PresentVoiceFrom(this, decoded, now);
     }
 
-    internal int DecodeVoicePacket(byte[] data, int length)
+    internal int DecodeVoicePacket(byte[] data, int length, float now)
     {
         if (_disposed || _player == null || _player.IsDestroyed ||
             data == null || length <= 0)
@@ -277,7 +302,9 @@ public sealed class SpeechTracker : MonoBehaviour
                 long energyStarted = monitor?.Begin(PerformanceMetric.EnergyUpdate) ?? -1L;
                 try
                 {
+                    PrepareSpeechRangeWrite(now);
                     _energy.Write(_samples, decoded);
+                    ObserveSpeechRange(decoded);
                 }
                 finally
                 {
@@ -299,7 +326,25 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_disposed || source == null || source._disposed)
             return false;
 
-        return _voicePresentation.TryPresent(decodedSamples, source.RootMeanSquare, now);
+        double sourceRootMeanSquare = source.RootMeanSquare;
+        bool presented = _voicePresentation.TryPresent(
+            decodedSamples,
+            sourceRootMeanSquare,
+            source._speechPercentiles.LowPercentileDecibels,
+            source._speechPercentiles.HighPercentileDecibels,
+            source._speechPercentiles.AnimationLowDecibels,
+            source._speechPercentiles.AnimationHighDecibels,
+            now);
+        if (!presented)
+            return false;
+
+        Settings.Config config = Plugin.Instance?.Config;
+        double activityFloor = NormalizeSpeechFloor(config?.LowDbThreshold ?? -80d);
+        bool audible = SpeechAnimationMath.IsAtOrAboveActivityFloor(
+            source._energy.Decibels,
+            activityFloor);
+        _audibleSpeechActivity.Observe(now, audible);
+        return true;
     }
 
     public void OverrideEmotion(EmotionPresetType preset, int durationMs) =>
@@ -317,7 +362,9 @@ public sealed class SpeechTracker : MonoBehaviour
 
     internal bool WasRecentlySpeaking(float now, float durationMilliseconds)
     {
-        return _voicePresentation.WasRecentlyActive(now, durationMilliseconds);
+        return _audibleSpeechActivity.WasRecentlyAudible(
+            now,
+            durationMilliseconds);
     }
 
     internal void CaptureGlanceSnapshot()
@@ -334,7 +381,10 @@ public sealed class SpeechTracker : MonoBehaviour
     public void Reset()
     {
         _energy.Reset();
+        _speechPercentiles.Reset();
+        ResetSpeechRangeObservationWindow();
         _voicePresentation.Reset();
+        ResetAudibleSpeech();
         CurrentVolumeRatio = 0f;
         _overrideEndTime = 0f;
         _lastLevel = SpeechLevel.Init;
@@ -381,6 +431,76 @@ public sealed class SpeechTracker : MonoBehaviour
         resetTime = config?.EmotionResetTime ?? 500;
         lowThreshold = config?.LowDbThreshold ?? -80d;
         highThreshold = config?.HighDbThreshold ?? -30d;
+    }
+
+    private void PrepareSpeechRangeWrite(float now)
+    {
+        if (_lastSourcePacketTime < 0f ||
+            now < _lastSourcePacketTime ||
+            now - _lastSourcePacketTime > SpeechRangeContinuityGapSeconds)
+        {
+            _energy.Reset();
+            _speechRangeCadence.Reset();
+        }
+
+        _lastSourcePacketTime = now;
+    }
+
+    private void ObserveSpeechRange(int decodedSamples)
+    {
+        if (decodedSamples <= 0)
+            return;
+
+        if (!_speechRangeCadence.Advance(decodedSamples))
+            return;
+
+        double decibels = _energy.Decibels;
+        Settings.Config config = Plugin.Instance?.Config;
+        double eligibilityFloor = NormalizeSpeechFloor(config?.LowDbThreshold ?? -80d);
+        if (SpeechAnimationMath.IsAtOrAboveActivityFloor(decibels, eligibilityFloor))
+            _speechPercentiles.Observe(decibels);
+    }
+
+    private void ResetSpeechRangeObservationWindow()
+    {
+        _speechRangeCadence.Reset();
+        _lastSourcePacketTime = -1f;
+    }
+
+    private void ResetAudibleSpeech()
+    {
+        _audibleSpeechActivity.Reset();
+    }
+
+    private static bool IsFinite(double value) =>
+        !double.IsNaN(value) && !double.IsInfinity(value);
+
+    private static double NormalizeSpeechFloor(double decibels)
+    {
+        if (!IsFinite(decibels))
+            return -80d;
+
+        return Math.Max(
+            RollingSpeechPercentiles.DefaultMinimumDecibels,
+            Math.Min(RollingSpeechPercentiles.DefaultMaximumDecibels, decibels));
+    }
+
+    private static double NormalizeSpeechCeiling(double decibels, double floor)
+    {
+        if (!IsFinite(decibels))
+            decibels = -30d;
+
+        double ceiling = Math.Max(
+            RollingSpeechPercentiles.DefaultMinimumDecibels,
+            Math.Min(RollingSpeechPercentiles.DefaultMaximumDecibels, decibels));
+        if (ceiling <= floor)
+        {
+            ceiling = Math.Min(
+                RollingSpeechPercentiles.DefaultMaximumDecibels,
+                floor + RollingSpeechPercentiles.DefaultMinimumSpanDecibels);
+        }
+
+        return ceiling;
     }
 
     private enum SpeechLevel
