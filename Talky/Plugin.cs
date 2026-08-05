@@ -8,6 +8,7 @@ using LabApi.Loader;
 using LabApi.Loader.Features.Plugins;
 using MEC;
 using Talky.Bridges;
+using Talky.Compatibility;
 using Talky.Core;
 using Talky.Handlers;
 using Talky.Performance;
@@ -120,41 +121,94 @@ public class Plugin : Plugin<Config>
  
     public override void Disable()
     {
-        if (!_enabled && Runtime == null && VoiceChattingHandler == null && FakeLookHandler == null)
-            return;
+        bool hadOwnedState =
+            _enabled ||
+            _fullyEnabled ||
+            _postEnableHandle.IsValid ||
+            Runtime != null ||
+            VoiceChattingHandler != null ||
+            FakeLookHandler != null ||
+            Settings != null ||
+            PerformanceMonitor != null;
 
         _enabled = false;
         _fullyEnabled = false;
         ++_lifecycleGeneration;
-        ServerEvents.PluginsEnabled -= OnPluginsEnabled;
-        if (_postEnableHandle.IsValid)
-            Timing.KillCoroutines(_postEnableHandle);
+        TryCleanup(
+            "unsubscribe the PluginsEnabled callback",
+            () => ServerEvents.PluginsEnabled -= OnPluginsEnabled);
+
+        CoroutineHandle postEnableHandle = _postEnableHandle;
         _postEnableHandle = default;
-
-        Runtime?.Disable();
-
-        if (VoiceChattingHandler != null)
+        if (postEnableHandle.IsValid)
         {
-            VoiceChattingHandler.UnregisterEvents();
+            TryCleanup(
+                "cancel delayed post-enable setup",
+                () => Timing.KillCoroutines(postEnableHandle));
+        }
+
+        TalkyRuntime runtime = Runtime;
+        if (runtime != null)
+            TryCleanup("disable the Talky runtime", runtime.Disable);
+
+        VoiceChattingHandler voiceHandler = VoiceChattingHandler;
+        if (voiceHandler != null &&
+            TryCleanup("unregister voice events", voiceHandler.UnregisterEvents))
+        {
             VoiceChattingHandler = null;
         }
-        if (FakeLookHandler != null)
+
+        FakeLookHandler fakeLookHandler = FakeLookHandler;
+        if (fakeLookHandler != null &&
+            TryCleanup("unregister look events", fakeLookHandler.UnregisterEvents))
         {
-            FakeLookHandler.UnregisterEvents();
             FakeLookHandler = null;
         }
-        if(HarmonyBridge.HarmonyPresent())
-            HarmonyBridge.RemovePatches();
-        Runtime?.Dispose();
-        Runtime = null;
-        if (Settings != null)
+
+        TryCleanup("remove the CedMod sync patch", RemoveCedModPatchIfPresent);
+
+        if (runtime != null &&
+            TryCleanup("dispose the Talky runtime", runtime.Dispose))
         {
-            Settings.Deactivate();
+            Runtime = null;
+        }
+
+        SSTalkySettings settings = Settings;
+        if (settings != null &&
+            TryCleanup("deactivate Talky settings", settings.Deactivate))
+        {
             Settings = null;
         }
-        PerformanceMonitor?.Dispose();
-        PerformanceMonitor = null;
-        Logger.Warn("Talky was disabled.");
+
+        TalkyPerformanceMonitor performanceMonitor = PerformanceMonitor;
+        if (performanceMonitor != null &&
+            TryCleanup("dispose the performance monitor", performanceMonitor.Dispose))
+        {
+            PerformanceMonitor = null;
+        }
+
+        if (hadOwnedState)
+            Logger.Warn("Talky was disabled.");
+    }
+
+    private static bool TryCleanup(string operation, Action cleanup)
+    {
+        try
+        {
+            cleanup();
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Logger.Error($"Talky failed to {operation}: {exception}");
+            return false;
+        }
+    }
+
+    private static void RemoveCedModPatchIfPresent()
+    {
+        if (HarmonyBridge.HarmonyPresent())
+            HarmonyBridge.RemovePatches();
     }
 
     public void OnPluginsEnabled()
@@ -185,20 +239,92 @@ public class Plugin : Plugin<Config>
 
         try
         {
-            bool requiresCedModPatch = CheckCedMod();
-            FakeLookHandler.RequireHarmonyPatch =
-                requiresCedModPatch && HarmonyBridge.HarmonyPresent() && HarmonyBridge.ApplyPatches();
+            CedModRuntimeProbe labApiProbe = CedModBridge.ProbeCandidates(
+                PluginLoader.EnabledPlugins.Cast<object>(),
+                "LabAPI");
+            CedModRuntimeProbe exiledProbe = ExiledBridge.ProbeCedModExiled();
+            CedModSelection selection = CedModCompatibilityPolicy.Select(
+                labApiProbe.State,
+                exiledProbe.State);
+
+            bool patchApplied = false;
+            string patchDetail = "CedMod helper patch not required";
+            if (selection.State == CedModPluginState.FakeSync)
+            {
+                CedModRuntimeProbe selectedProbe =
+                    labApiProbe.State == CedModPluginState.FakeSync
+                        ? labApiProbe
+                        : exiledProbe;
+                if (!HarmonyBridge.HarmonyPresent())
+                {
+                    patchDetail = "0Harmony is not loaded";
+                }
+                else
+                {
+                    patchApplied = HarmonyBridge.ApplyPatches(
+                        selectedProbe.Assembly,
+                        out patchDetail);
+                }
+            }
+            else
+            {
+                RemoveCedModPatchIfPresent();
+            }
+
+            CedModLookSyncPlan plan = CedModCompatibilityPolicy.Resolve(
+                selection,
+                patchApplied);
+            FakeLookHandler.ConfigureSyncMode(plan.Mode);
             FakeLookHandler.RegisterEvents();
             _fullyEnabled = true;
+
+            LogCedModCompatibility(
+                labApiProbe,
+                exiledProbe,
+                plan,
+                patchDetail);
 
             Logger.Debug("Talky was fully enabled.", Config.Debug);
         }
         catch (Exception exception)
         {
             Logger.Error("Talky post-enable setup failed: " + exception);
-            FakeLookHandler.RequireHarmonyPatch = false;
-            FakeLookHandler.RegisterEvents();
-            _fullyEnabled = true;
+            bool eventCleanupSucceeded = true;
+            try
+            {
+                FakeLookHandler?.UnregisterEvents();
+            }
+            catch (Exception cleanupException)
+            {
+                eventCleanupSucceeded = false;
+                Logger.Error("Talky failed to remove partial event subscriptions: " + cleanupException);
+            }
+
+            TryCleanup("remove the CedMod sync patch", RemoveCedModPatchIfPresent);
+
+            if (!eventCleanupSucceeded)
+            {
+                Logger.Error(
+                    "Talky will disable instead of re-registering over an unknown partial " +
+                    "event state.");
+                Disable();
+                return;
+            }
+
+            try
+            {
+                FakeLookHandler.ConfigureSyncMode(CedModLookSyncMode.CedModUnsupported);
+                FakeLookHandler.RegisterEvents();
+                _fullyEnabled = true;
+                Logger.Error(
+                    "Talky recovered in common-events-only mode; outbound head-sync " +
+                    "rewriting is disabled, while other Talky features remain enabled.");
+            }
+            catch (Exception recoveryException)
+            {
+                Logger.Error("Talky post-enable recovery failed: " + recoveryException);
+                Disable();
+            }
         }
     }
 
@@ -233,72 +359,30 @@ public class Plugin : Plugin<Config>
         }
     }
         
-    private bool CheckCedMod()
+    private void LogCedModCompatibility(
+        CedModRuntimeProbe labApiProbe,
+        CedModRuntimeProbe exiledProbe,
+        CedModLookSyncPlan plan,
+        string patchDetail)
     {
-        var cedMod = PluginLoader.EnabledPlugins.FirstOrDefault(
-            plugin => plugin.GetType().FullName == "CedMod.CedModMain");
-        
-        if (cedMod == null) return false;
-
-        if (!TryGetPropertyPath(
-                cedMod,
-                out bool disableFakeSyncing,
-                "Config",
-                "CedMod",
-                "DisableFakeSyncing"))
+        string diagnostic =
+            $"CedMod sync compatibility: mode={plan.Mode}, reason={plan.Reason}; " +
+            $"LabAPI[{labApiProbe.Detail}]; EXILED[{exiledProbe.Detail}]; " +
+            $"patch[{patchDetail}]";
+        switch (plan.Mode)
         {
-            return false;
+            case CedModLookSyncMode.CedModFakeSync:
+                Logger.Warn(diagnostic);
+                break;
+            case CedModLookSyncMode.CedModUnsupported:
+                Logger.Error(
+                    diagnostic + "; outbound head-sync rewriting is disabled, while " +
+                    "other Talky features remain enabled.");
+                break;
+            default:
+                Logger.Debug(diagnostic, Config.Debug);
+                break;
         }
-
-        if (!disableFakeSyncing)
-        {
-            Logger.Warn("Applying CedMod workaround patch...");
-            return true;
-        }
-
-        if (ExiledBridge.ExiledPresent())
-            return ExiledBridge.CheckCedModExiled();
-
-        return false;
-
-    }
-
-    private static bool TryGetPropertyPath<T>(
-        object root,
-        out T value,
-        params string[] path)
-    {
-        object current = root;
-
-        foreach (string memberName in path)
-        {
-            if (current == null)
-            {
-                value = default;
-                return false;
-            }
-
-            PropertyInfo property = current.GetType().GetProperty(
-                memberName,
-                BindingFlags.Instance | BindingFlags.Public);
-
-            if (property == null || property.GetIndexParameters().Length != 0)
-            {
-                value = default;
-                return false;
-            }
-
-            current = property.GetValue(current);
-        }
-
-        if (current is T typed)
-        {
-            value = typed;
-            return true;
-        }
-
-        value = default;
-        return false;
     }
 
         

@@ -115,6 +115,7 @@
     <ItemGroup>
         <Compile Include="Behaviours\LookOverride.cs" />
         <Compile Include="Behaviours\SpeechTracker.cs" />
+        <Compile Include="Bridges\CedModBridge.cs" />
         <Compile Include="Bridges\ExiledBridge.cs" />
         <Compile Include="Bridges\ExiledRegistration.cs" />
         <Compile Include="Bridges\HarmonyBridge.cs" />

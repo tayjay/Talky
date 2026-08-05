@@ -1,8 +1,9 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using LabApi.Features.Console;
+using Talky.Compatibility;
 
 namespace Talky.Bridges;
 
@@ -18,67 +19,42 @@ internal static class ExiledBridge
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool CheckCedModExiled()
+    public static CedModRuntimeProbe ProbeCedModExiled()
     {
-        if(!ExiledPresent()) return false;
-        
-        var cedMod = Exiled.Loader.Loader.Plugins.FirstOrDefault(
-            plugin => plugin.GetType().FullName == "CedMod.CedModMain");
-        
-        if (cedMod == null) return false;
+        if (!ExiledPresent())
+            return CedModRuntimeProbe.NotPresent("EXILED");
 
-        if (!TryGetPropertyPath(
-                cedMod,
-                out bool disableFakeSyncing,
-                "Config",
-                "CedMod",
-                "DisableFakeSyncing"))
+        try
         {
-            return false;
+            return ProbeCedModExiledCore();
         }
-
-        if (!disableFakeSyncing)
-            Logger.Warn("Applying CedMod workaround patch for Exiled...");
-
-        return !disableFakeSyncing;
+        catch (Exception exception)
+        {
+            return new CedModRuntimeProbe(
+                CedModPluginState.Unreadable,
+                "EXILED",
+                null,
+                null,
+                "discovery failed: " + exception.GetType().Name + ": " + exception.Message);
+        }
     }
-    
-    private static bool TryGetPropertyPath<T>(
-        object root,
-        out T value,
-        params string[] path)
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static CedModRuntimeProbe ProbeCedModExiledCore()
     {
-        object current = root;
-
-        foreach (string memberName in path)
+        List<object> enabledCedModPlugins = new List<object>();
+        foreach (var plugin in Exiled.Loader.Loader.Plugins)
         {
-            if (current == null)
-            {
-                value = default;
-                return false;
-            }
+            if (plugin?.GetType().FullName != CedModBridge.PluginTypeName)
+                continue;
 
-            PropertyInfo property = current.GetType().GetProperty(
-                memberName,
-                BindingFlags.Instance | BindingFlags.Public);
+            if (plugin.Config == null || !plugin.Config.IsEnabled)
+                continue;
 
-            if (property == null || property.GetIndexParameters().Length != 0)
-            {
-                value = default;
-                return false;
-            }
-
-            current = property.GetValue(current);
+            enabledCedModPlugins.Add(plugin);
         }
 
-        if (current is T typed)
-        {
-            value = typed;
-            return true;
-        }
-
-        value = default;
-        return false;
+        return CedModBridge.ProbeCandidates(enabledCedModPlugins, "EXILED");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

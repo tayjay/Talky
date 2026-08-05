@@ -28,6 +28,7 @@
     </ProjectReference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="CedModCompatibilityTests.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="RollingSpeechPercentilesTests.cs" />
   </ItemGroup>

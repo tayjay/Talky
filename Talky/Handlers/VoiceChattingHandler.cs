@@ -122,12 +122,12 @@ public sealed class VoiceChattingHandler
         if (!_registered)
             return;
 
-        _registered = false;
         LabApi.Events.Handlers.PlayerEvents.SendingVoiceMessage -= OnNewVoiceSending;
         LabApi.Events.Handlers.PlayerEvents.Spawned -= OnSpawn;
         LabApi.Events.Handlers.PlayerEvents.Hurt -= OnHurt;
         LabApi.Events.Handlers.PlayerEvents.UsingItem -= OnUsingItem;
         LabApi.Events.Handlers.ServerEvents.RoundRestarted -= OnRoundRestart;
         LabApi.Events.Handlers.PlayerEvents.Left -= OnPlayerLeft;
+        _registered = false;
     }
 }

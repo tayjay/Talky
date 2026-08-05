@@ -17,6 +17,7 @@ internal static class Program
         {
             TestRollingVoiceEnergy();
             _assertions += RollingSpeechPercentilesTests.Run();
+            _assertions += CedModCompatibilityTests.Run();
             TestVoicePresentationState();
             TestConfigurationAndPolicy();
             TestRecentSpeakerExpiry();
