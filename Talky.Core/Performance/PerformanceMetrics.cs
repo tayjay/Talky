@@ -51,6 +51,8 @@ public enum PerformanceSubsystem
     Look = 3,
     Scheduler = 4,
     Sync = 5,
+    // Frame-controller and governor measurements only. Begin/End/Count instrumentation at
+    // individual call sites is deliberately excluded, so this is a monitoring lower bound.
     Monitoring = 6,
     Count = 7,
 }

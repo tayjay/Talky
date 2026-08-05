@@ -1027,8 +1027,11 @@ internal static class Program
             message.Contains($"voice={0.5d:F3} ({100d / 44d:F1}%)"),
             "Summary message voice field");
         True(
-            message.Contains($"profiler={11.5d:F3} ms/frame"),
-            "Summary message monitoring field");
+            message.Contains($"frame_monitor_lower_bound={11.5d:F3} ms/frame"),
+            "Summary message monitoring lower-bound field");
+        True(
+            !message.Contains("profiler="),
+            "Summary does not imply the frame monitor is total profiler overhead");
         True(message.Contains("sync_entries=7"), "Summary message counter values");
         string probeMessage = summary.CreateLogMessage(
             PerformanceMode.Automatic,

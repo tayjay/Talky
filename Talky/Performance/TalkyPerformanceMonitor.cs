@@ -562,7 +562,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         double look = breakdown.LookMilliseconds / window.FrameCount;
         double scheduler = breakdown.SchedulerMilliseconds / window.FrameCount;
         double sync = breakdown.SyncMilliseconds / window.FrameCount;
-        double profiler = breakdown.MonitoringMilliseconds / window.FrameCount;
+        double frameMonitorLowerBound = breakdown.MonitoringMilliseconds / window.FrameCount;
         double smoothTps = _latestSmoothDeltaMilliseconds > 0d
             ? 1000d / _latestSmoothDeltaMilliseconds
             : 0d;
@@ -578,7 +578,8 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             $"server_max={window.FrameMaxMilliseconds:F2} ms, " +
             $"smooth_tps={smoothTps:F1}/{_latestServerTickrate}, " +
             $"voice/face/look/scheduler/sync={voice:F3}/{face:F3}/{look:F3}/" +
-            $"{scheduler:F3}/{sync:F3} ms/frame, profiler={profiler:F3} ms/frame, " +
+            $"{scheduler:F3}/{sync:F3} ms/frame, " +
+            $"frame_monitor_lower_bound={frameMonitorLowerBound:F3} ms/frame, " +
             $"players={NonNegative(players)}, " +
             $"recent_speakers={NonNegative(recentSpeakers)}, active_looks={NonNegative(activeLooks)}.");
     }

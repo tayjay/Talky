@@ -12,6 +12,9 @@ internal static class Program
     private const int PacketSize = 480;
     private const int PacketIterations = 10000;
     private const int TargetGlanceVisitsPerScenario = 20000000;
+    private const int BenchmarkFrameRate = 60;
+    private const int SyncCallbacksPerPairPerFrame = 2;
+    private const int VoicePacketsPerSecond = 100;
     private static readonly int[] TypicalPlayerCounts = { 5, 10, 15, 20, 25, 30 };
     private static double _sink;
     private static long _workSink;
@@ -123,10 +126,13 @@ internal static class Program
     {
         int[] activeSpeakers = { 0, 1, 4, 8 };
         const int glanceHz = 20;
-        const int syncHz = 60;
 
         Console.WriteLine("Glance scan benchmark (legacy all-player scan vs recent-speaker index)");
         Console.WriteLine("Each row warms both paths, then executes enough full batches for about 20M legacy visits.");
+        Console.WriteLine(
+            "Sync model: {0} callbacks per ordered player pair per {1} Hz frame.",
+            SyncCallbacksPerPairPerFrame,
+            BenchmarkFrameRate);
         Console.WriteLine(
             " players speakers | legacy ms / B | indexed ms / B | speedup | legacy cand/s | indexed cand/s | sync entries/s");
         for (int p = 0; p < TypicalPlayerCounts.Length; p++)
@@ -181,7 +187,9 @@ internal static class Program
 
                 long legacyCandidates = (long)players * (players - 1) * glanceHz;
                 long indexedCandidates = (long)speakers * (players - 1) * glanceHz;
-                long syncEntries = 2L * syncHz * players * (players - 1);
+                long syncEntries =
+                    (long)SyncCallbacksPerPairPerFrame * BenchmarkFrameRate *
+                    players * (players - 1);
                 Console.WriteLine(
                     " {0,7} {1,8} | {2,7:N2}/{3,3:N0} | {4,8:N2}/{5,3:N0} | {6,7:N2}x | {7,13:N0} | {8,14:N0} | {9,14:N0}",
                     players,
@@ -201,6 +209,11 @@ internal static class Program
     private static void RunProfilerBenchmark()
     {
         const int iterations = 1000000;
+        RunVoiceMonitoringBenchmark(iterations);
+        Console.WriteLine();
+        RunFrameMonitoringBenchmark(iterations);
+        Console.WriteLine();
+
         PerformanceProfiler profiler = new PerformanceProfiler();
         Stopwatch stopwatch = new Stopwatch();
 
@@ -236,7 +249,11 @@ internal static class Program
         Console.WriteLine("  Direct total     : {0,10:N2} ms", directTotalMilliseconds);
         Console.WriteLine("  Average           : {0,10:N3} us/call", microsecondsPerCall);
         Console.WriteLine("  Steady allocation : {0,10:N0} B", allocated);
-        Console.WriteLine("  Estimated callback-sampling overhead at 60Hz:");
+        Console.WriteLine(
+            "  Estimated callback-sampling overhead at {0} Hz " +
+            "({1} callbacks/ordered pair/frame):",
+            BenchmarkFrameRate,
+            SyncCallbacksPerPairPerFrame);
         Console.WriteLine("   players | direct ms/frame | CedMod prefix+postfix ms/frame");
         for (int i = 0; i < TypicalPlayerCounts.Length; i++)
         {
@@ -259,14 +276,153 @@ internal static class Program
         double directMicrosecondsPerCall,
         double cedModMicrosecondsPerPair)
     {
-        int pairs = players * (players - 1);
-        double directMillisecondsPerFrame = directMicrosecondsPerCall * pairs / 1000d;
-        double cedModMillisecondsPerFrame = cedModMicrosecondsPerPair * pairs / 1000d;
+        long callbacksPerFrame =
+            (long)players * (players - 1) * SyncCallbacksPerPairPerFrame;
+        double directMillisecondsPerFrame =
+            directMicrosecondsPerCall * callbacksPerFrame / 1000d;
+        double cedModMillisecondsPerFrame =
+            cedModMicrosecondsPerPair * callbacksPerFrame / 1000d;
         Console.WriteLine(
             "   {0,7} | {1,15:N4} | {2,32:N4}",
             players,
             directMillisecondsPerFrame,
             cedModMillisecondsPerFrame);
+    }
+
+    private static void RunVoiceMonitoringBenchmark(int iterations)
+    {
+        PerformanceProfiler profiler = new PerformanceProfiler(60, 60);
+        for (int i = 0; i < 10000; i++)
+            RecordVoiceMonitoring(profiler);
+        profiler.Reset();
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Stopwatch stopwatch = new Stopwatch();
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        stopwatch.Start();
+        for (int i = 0; i < iterations; i++)
+            RecordVoiceMonitoring(profiler);
+        stopwatch.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        double nanosecondsPerPacket =
+            stopwatch.Elapsed.TotalMilliseconds * 1000000d / iterations;
+        double millisecondsPerFramePerSpeaker =
+            nanosecondsPerPacket * VoicePacketsPerSecond /
+            BenchmarkFrameRate / 1000000d;
+
+        Console.WriteLine(
+            "Voice monitoring core: {0:N0} packets, production sampling 1/{1}",
+            iterations,
+            PerformanceMetricCatalog.VoiceSampleEvery);
+        Console.WriteLine(
+            "  Average           : {0,10:N2} ns/packet",
+            nanosecondsPerPacket);
+        Console.WriteLine(
+            "  At {0} packets/s  : {1,10:N6} ms/frame/speaker at {2} Hz",
+            VoicePacketsPerSecond,
+            millisecondsPerFramePerSpeaker,
+            BenchmarkFrameRate);
+        Console.WriteLine(
+            "  Steady allocation : {0,10:N0} B",
+            allocated);
+        Console.WriteLine(
+            "  Scope              : PerformanceProfiler calls and counters; " +
+            "adapter/singleton access excluded");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void RecordVoiceMonitoring(PerformanceProfiler profiler)
+    {
+        long voiceStarted = profiler.BeginSample(
+            PerformanceMetric.VoicePacket,
+            PerformanceMetricCatalog.VoiceSampleEvery);
+        profiler.Increment(Talky.Performance.PerformanceCounter.VoicePackets);
+
+        long decodeStarted = profiler.BeginSample(
+            PerformanceMetric.OpusDecode,
+            PerformanceMetricCatalog.VoiceSampleEvery);
+        profiler.EndSample(PerformanceMetric.OpusDecode, decodeStarted);
+
+        long energyStarted = profiler.BeginSample(
+            PerformanceMetric.EnergyUpdate,
+            PerformanceMetricCatalog.VoiceSampleEvery);
+        profiler.EndSample(PerformanceMetric.EnergyUpdate, energyStarted);
+
+        profiler.Increment(
+            Talky.Performance.PerformanceCounter.DecodedSamples,
+            PacketSize);
+        profiler.EndSample(PerformanceMetric.VoicePacket, voiceStarted);
+    }
+
+    private static void RunFrameMonitoringBenchmark(int iterations)
+    {
+        PerformanceProfiler profiler = new PerformanceProfiler(60, 60);
+        PerformanceSummaryAccumulator summary = new PerformanceSummaryAccumulator();
+        for (int i = 0; i < 10000; i++)
+            RecordFrameMonitoring(profiler, summary);
+        profiler.Reset();
+        summary.Reset(0d);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Stopwatch stopwatch = new Stopwatch();
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        stopwatch.Start();
+        for (int i = 0; i < iterations; i++)
+            RecordFrameMonitoring(profiler, summary);
+        stopwatch.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        double nanosecondsPerFrame =
+            stopwatch.Elapsed.TotalMilliseconds * 1000000d / iterations;
+
+        Console.WriteLine(
+            "Frame-monitor core: {0:N0} eligible steady-state frames",
+            iterations);
+        Console.WriteLine(
+            "  Average           : {0,10:N2} ns/frame ({1:N6} ms/frame)",
+            nanosecondsPerFrame,
+            nanosecondsPerFrame / 1000000d);
+        Console.WriteLine(
+            "  Steady allocation : {0,10:N0} B",
+            allocated);
+        Console.WriteLine(
+            "  Scope              : frame counters/histogram, summary population, " +
+            "window check, and self-timing");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void RecordFrameMonitoring(
+        PerformanceProfiler profiler,
+        PerformanceSummaryAccumulator summary)
+    {
+        _sink += Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+        long controllerStarted = Stopwatch.GetTimestamp();
+
+        profiler.Increment(Talky.Performance.PerformanceCounter.TrackedPlayers, 30);
+        profiler.Increment(Talky.Performance.PerformanceCounter.RecentSpeakers, 4);
+        profiler.Increment(Talky.Performance.PerformanceCounter.ActiveLookTargets, 8);
+        profiler.RecordFrameMilliseconds(1000d / BenchmarkFrameRate);
+        summary.RecordEligibleFrame(
+            30,
+            4,
+            8,
+            1000d / BenchmarkFrameRate,
+            BenchmarkFrameRate,
+            true);
+
+        profiler.TryCloseWindow(Stopwatch.GetTimestamp(), out _);
+        long controllerTicks = Stopwatch.GetTimestamp() - controllerStarted;
+        if (controllerTicks > 0L)
+        {
+            profiler.RecordDurationTicks(
+                PerformanceMetric.ProfilerOverhead,
+                controllerTicks);
+        }
     }
 
     private static float[] CreatePacket()

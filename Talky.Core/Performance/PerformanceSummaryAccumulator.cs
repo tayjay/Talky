@@ -219,7 +219,8 @@ public sealed class PerformanceSummaryAccumulator
             $"({GetSubsystemShare(PerformanceSubsystem.Scheduler):F1}%), " +
             $"sync={GetSubsystemMillisecondsPerFrame(PerformanceSubsystem.Sync):F3} " +
             $"({GetSubsystemShare(PerformanceSubsystem.Sync):F1}%), " +
-            $"profiler={GetSubsystemMillisecondsPerFrame(PerformanceSubsystem.Monitoring):F3} ms/frame, " +
+            $"frame_monitor_lower_bound=" +
+            $"{GetSubsystemMillisecondsPerFrame(PerformanceSubsystem.Monitoring):F3} ms/frame, " +
             $"players_avg={AveragePlayers:F1}, speakers_avg={AverageRecentSpeakers:F1}, " +
             $"active_looks_avg={AverageActiveLooks:F1}, " +
             $"voice_packets={GetCounter(PerformanceCounter.VoicePackets)}, " +
