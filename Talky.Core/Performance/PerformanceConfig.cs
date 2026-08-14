@@ -85,7 +85,7 @@ public sealed class PerformanceConfig
     public int MinimumFaceHz { get; set; } = 15;
 
     [Description("Seconds between aggregate performance summaries. Zero disables periodic summaries.")]
-    public int SummaryLogIntervalSeconds { get; set; } = 300;
+    public int SummaryLogIntervalSeconds { get; set; } = 0;
 
     public PerformanceConfig Clone()
     {
@@ -225,7 +225,7 @@ public static class PerformanceConfigValidator
             value.MinimumFaceHz, 15, value.EconomyFaceHz, 15,
             nameof(value.MinimumFaceHz), ref summary, ref corrections);
         value.SummaryLogIntervalSeconds = Clamp(
-            value.SummaryLogIntervalSeconds, 0, 86400, 300,
+            value.SummaryLogIntervalSeconds, 0, 86400, 0,
             nameof(value.SummaryLogIntervalSeconds), ref summary, ref corrections);
 
         return new PerformanceConfigValidationResult(

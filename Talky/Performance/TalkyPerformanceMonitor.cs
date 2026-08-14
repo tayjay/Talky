@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using LabApi.Features.Console;
+using Talky.Compatibility;
 using Talky.Settings;
 
 namespace Talky.Performance;
@@ -18,6 +20,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     public const int SyncSampleEvery = PerformanceMetricCatalog.SyncSampleEvery;
 
     private const int HistorySeconds = 60;
+    private const double DiagnosticsPublicationSeconds = 2d;
     private const double SummaryFallbackSeconds = 300d;
     private const double FloorWarningIntervalSeconds = 300d;
 
@@ -29,6 +32,10 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         new PerformanceSummaryAccumulator();
     private readonly PerformanceTransitionTracker _transitions =
         new PerformanceTransitionTracker();
+    private readonly TalkyDiagnosticsCollector _diagnostics =
+        new TalkyDiagnosticsCollector();
+
+    private TalkyDiagnosticsSnapshot _latestDiagnostics;
 
     private double _lastNowSeconds;
     private bool _hasTimeOrigin;
@@ -40,6 +47,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     private bool _failureLogged;
 
     private double _lastFloorWarningAt = double.NegativeInfinity;
+    private double _lastDiagnosticsPublicationAt = double.NegativeInfinity;
     private double _latestSmoothDeltaMilliseconds;
     private int _latestServerTickrate;
     private GovernorReason _lastTransitionReason;
@@ -67,6 +75,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _profilingEnabled = _governor.Settings.Mode != PerformanceMode.Disabled;
         RefreshCurrentPolicy();
         _lastTransitionReason = InitialReason(_governor.Settings);
+        _diagnostics.SetLifecycleState(TalkyDiagnosticsLifecycleState.Enabling);
         ResetWindowGate();
         _summary.Reset(_lastNowSeconds);
         _transitions.Reset();
@@ -81,6 +90,58 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     public PerformanceTier Tier => _governor.CurrentTier;
 
     public bool IsFrozen => _frozen || _governor.IsFrozen;
+
+    /// <summary>
+    /// Reads the last fully constructed schema-v1 snapshot. Publication is one atomic reference
+    /// write, so callers on other threads never observe an accumulator while it is being updated.
+    /// </summary>
+    public bool TryGetDiagnosticsSnapshot(out TalkyDiagnosticsSnapshot snapshot)
+    {
+        snapshot = Volatile.Read(ref _latestDiagnostics);
+        return snapshot != null;
+    }
+
+    public void SetDiagnosticsLifecycleState(TalkyDiagnosticsLifecycleState lifecycle)
+    {
+        _diagnostics.SetLifecycleState(lifecycle);
+        PublishStateHeartbeat();
+    }
+
+    public void SetDiagnosticsCompatibilityIdentity(
+        TalkyDiagnosticsTrustState harmony,
+        TalkyDiagnosticsTrustState cedMod,
+        bool cedModSyncModeKnown,
+        CedModLookSyncMode cedModSyncMode)
+    {
+        _diagnostics.SetCompatibilityIdentity(
+            harmony,
+            cedMod,
+            cedModSyncModeKnown,
+            cedModSyncMode);
+        PublishStateHeartbeat();
+    }
+
+    private void PublishStateHeartbeat()
+    {
+        if (_disposed)
+            return;
+
+        PerformanceConfig settings = _governor.Settings;
+        TalkyDiagnosticsSnapshot publication = _diagnostics.PublishHeartbeat(
+            _lastNowSeconds,
+            settings.EvaluationWindowSeconds,
+            settings.Mode,
+            Tier,
+            _governor.CommittedTier,
+            _governor.IsRecoveryProbeActive,
+            _profilingEnabled,
+            IsFrozen,
+            retainCompletedIntervals: true,
+            actualTickRate: CurrentActualTickRate(),
+            targetTickRate: _latestServerTickrate);
+        Volatile.Write(ref _latestDiagnostics, publication);
+        _lastDiagnosticsPublicationAt = _lastNowSeconds;
+    }
 
     /// <summary>
     /// Starts a measurement. Passing zero or a negative sampling rate selects the production
@@ -115,14 +176,44 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
     public void Count(PerformanceCounter counter)
     {
-        if (!_frozen && _profilingEnabled)
-            _profiler.Increment(counter);
+        Count(counter, 1L);
     }
 
     public void Count(PerformanceCounter counter, long amount)
     {
-        if (!_frozen && _profilingEnabled && amount != 0L)
-            _profiler.Increment(counter, amount);
+        _diagnostics.RecordCounter(counter, amount);
+
+        if (_frozen || !_profilingEnabled)
+            return;
+
+        switch (PerformanceCounterCatalog.Aggregation(counter))
+        {
+            case PerformanceCounterAggregation.Last:
+                _profiler.SetGauge(counter, amount > 0L ? amount : 0L);
+                break;
+            case PerformanceCounterAggregation.Maximum:
+                if (amount > 0L)
+                    _profiler.ObserveHighWater(counter, amount);
+                break;
+            default:
+                if (amount != 0L)
+                    _profiler.Increment(counter, amount);
+                break;
+        }
+    }
+
+    public void SetGauge(PerformanceCounter counter, long value)
+    {
+        _diagnostics.RecordCounter(counter, value);
+        if (!_frozen && _profilingEnabled)
+            _profiler.SetGauge(counter, value > 0L ? value : 0L);
+    }
+
+    public void ObserveHighWater(PerformanceCounter counter, long value)
+    {
+        _diagnostics.RecordCounter(counter, value);
+        if (!_frozen && _profilingEnabled && value > 0L)
+            _profiler.ObserveHighWater(counter, value);
     }
 
     /// <summary>
@@ -144,8 +235,13 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             return;
 
         ObserveTime(now);
+        ObserveServerRates(smoothDeltaMilliseconds, serverTickrate);
+        _diagnostics.ObserveFrame(players, recentSpeakers, activeLooks);
         if (_frozen || !_profilingEnabled)
+        {
+            TryPublishInactiveDiagnostics();
             return;
+        }
 
         long controllerStarted = Stopwatch.GetTimestamp();
         long governorTicks = 0L;
@@ -166,7 +262,10 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             }
 
             if (!_profiler.TryCloseWindow(Stopwatch.GetTimestamp(), out PerformanceWindow window))
+            {
+                TryPublishActiveDiagnostics();
                 return;
+            }
 
             EvaluateWindow(
                 window,
@@ -208,20 +307,22 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         bool validSmooth =
             IsFinite(smoothDeltaMilliseconds) && smoothDeltaMilliseconds > 0d;
-        if (validSmooth)
-            _latestSmoothDeltaMilliseconds = smoothDeltaMilliseconds;
-        if (serverTickrate > 0)
-            _latestServerTickrate = serverTickrate;
 
         bool healthEligible = !idle && roundActive && players > 0;
 
-        _profiler.Increment(PerformanceCounter.TrackedPlayers, NonNegative(players));
+        long trackedPlayers = NonNegative(players);
+        long trackedSpeakers = NonNegative(recentSpeakers);
+        long trackedLooks = NonNegative(activeLooks);
+        _diagnostics.RecordCounter(PerformanceCounter.TrackedPlayers, trackedPlayers);
+        _diagnostics.RecordCounter(PerformanceCounter.RecentSpeakers, trackedSpeakers);
+        _diagnostics.RecordCounter(PerformanceCounter.ActiveLookTargets, trackedLooks);
+        _profiler.Increment(PerformanceCounter.TrackedPlayers, trackedPlayers);
         _profiler.Increment(
             PerformanceCounter.RecentSpeakers,
-            NonNegative(recentSpeakers));
+            trackedSpeakers);
         _profiler.Increment(
             PerformanceCounter.ActiveLookTargets,
-            NonNegative(activeLooks));
+            trackedLooks);
         _profiler.RecordFrameMilliseconds(deltaMilliseconds);
 
         if (!_windowHasFrames)
@@ -290,6 +391,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         long governorStarted = Stopwatch.GetTimestamp();
         GovernorDecision decision = _governor.Evaluate(sample, _lastNowSeconds);
+        _diagnostics.ObserveGovernorDecision(decision);
         governorTicks = Stopwatch.GetTimestamp() - governorStarted;
         if (governorTicks > 0L)
             _profiler.RecordDurationTicks(PerformanceMetric.Governor, governorTicks);
@@ -331,6 +433,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         _summary.ObserveTier(observedTier);
         _summary.AddWindow(window, breakdown);
+        PublishDiagnostics(window);
         TryLogSummary(_lastNowSeconds);
     }
 
@@ -371,7 +474,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         ResetWindowGate();
         _summary.Reset(_lastNowSeconds);
         _transitions.Reset();
-        ResetDiagnosticSnapshots();
+        ResetDiagnosticSnapshots(resetRoundHighWater: false);
     }
 
     /// <summary>
@@ -389,7 +492,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _summary.Reset(_lastNowSeconds);
         _transitions.Reset();
         _lastTransitionReason = InitialReason(_governor.Settings);
-        ResetDiagnosticSnapshots();
+        ResetDiagnosticSnapshots(resetRoundHighWater: true);
     }
 
     public void Freeze()
@@ -409,6 +512,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         _disposed = true;
         FreezeInternal("monitor disposed");
+        _diagnostics.Dispose();
     }
 
     private void LogConfigurationReload(
@@ -657,16 +761,109 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _windowHealthEligible = false;
     }
 
-    private void ResetDiagnosticSnapshots()
+    private void ResetDiagnosticSnapshots(bool resetRoundHighWater)
     {
         _latestSmoothDeltaMilliseconds = 0d;
         _latestServerTickrate = 0;
         _lastFloorWarningAt = double.NegativeInfinity;
+        _lastDiagnosticsPublicationAt = double.NegativeInfinity;
+        _diagnostics.ClearCompletedIntervals();
+        if (resetRoundHighWater)
+            _diagnostics.ResetRoundHighWater();
+
+        // Replace the atomically published view immediately; callers must not observe the
+        // previous round/configuration window until a later Unity frame happens to run.
+        PublishStateHeartbeat();
+    }
+
+    private void PublishDiagnostics(PerformanceWindow window)
+    {
+        PerformanceConfig settings = _governor.Settings;
+        TalkyDiagnosticsSnapshot publication = _diagnostics.Publish(
+            _profiler,
+            window,
+            _lastNowSeconds,
+            settings.EvaluationWindowSeconds,
+            settings.Mode,
+            Tier,
+            _governor.CommittedTier,
+            _governor.IsRecoveryProbeActive,
+            _profilingEnabled,
+            IsFrozen,
+            CurrentActualTickRate(),
+            _latestServerTickrate);
+        Volatile.Write(ref _latestDiagnostics, publication);
+        _lastDiagnosticsPublicationAt = _lastNowSeconds;
+    }
+
+    private void TryPublishInactiveDiagnostics()
+    {
+        if (!_hasTimeOrigin ||
+            _lastNowSeconds - _lastDiagnosticsPublicationAt < DiagnosticsPublicationSeconds)
+        {
+            return;
+        }
+
+        PerformanceConfig settings = _governor.Settings;
+        TalkyDiagnosticsSnapshot publication = _diagnostics.PublishHeartbeat(
+            _lastNowSeconds,
+            settings.EvaluationWindowSeconds,
+            settings.Mode,
+            Tier,
+            _governor.CommittedTier,
+            _governor.IsRecoveryProbeActive,
+            _profilingEnabled,
+            IsFrozen,
+            retainCompletedIntervals: false,
+            actualTickRate: CurrentActualTickRate(),
+            targetTickRate: _latestServerTickrate);
+        Volatile.Write(ref _latestDiagnostics, publication);
+        _lastDiagnosticsPublicationAt = _lastNowSeconds;
+    }
+
+    private void TryPublishActiveDiagnostics()
+    {
+        if (!_hasTimeOrigin ||
+            _lastNowSeconds - _lastDiagnosticsPublicationAt < DiagnosticsPublicationSeconds)
+        {
+            return;
+        }
+
+        PerformanceConfig settings = _governor.Settings;
+        TalkyDiagnosticsSnapshot publication = _diagnostics.PublishHeartbeat(
+            _lastNowSeconds,
+            settings.EvaluationWindowSeconds,
+            settings.Mode,
+            Tier,
+            _governor.CommittedTier,
+            _governor.IsRecoveryProbeActive,
+            true,
+            false,
+            retainCompletedIntervals: true,
+            actualTickRate: CurrentActualTickRate(),
+            targetTickRate: _latestServerTickrate);
+        Volatile.Write(ref _latestDiagnostics, publication);
+        _lastDiagnosticsPublicationAt = _lastNowSeconds;
     }
 
     private static long NonNegative(int value)
     {
         return value > 0 ? value : 0L;
+    }
+
+    private double CurrentActualTickRate()
+    {
+        return _latestSmoothDeltaMilliseconds > 0d
+            ? 1000d / _latestSmoothDeltaMilliseconds
+            : 0d;
+    }
+
+    private void ObserveServerRates(double smoothDeltaMilliseconds, int serverTickrate)
+    {
+        if (IsFinite(smoothDeltaMilliseconds) && smoothDeltaMilliseconds > 0d)
+            _latestSmoothDeltaMilliseconds = smoothDeltaMilliseconds;
+        if (serverTickrate > 0)
+            _latestServerTickrate = serverTickrate;
     }
 
     private string PressureSource(PerformanceWindow window, bool serverHealthEligible)

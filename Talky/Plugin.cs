@@ -31,6 +31,7 @@ public class Plugin : Plugin<Config>
     private int _lifecycleGeneration;
     private bool _enabled;
     private bool _fullyEnabled;
+    private bool _pluginsEnabledSubscribed;
 
     // Set by the EXILED native path (TalkyBridge.Enable) before Enable() runs, so Enable() runs
     // post-load setup directly instead of subscribing to LabAPI's ServerEvents.PluginsEnabled,
@@ -44,12 +45,24 @@ public class Plugin : Plugin<Config>
                assembly != ownAssembly &&
                assembly.GetType(typeof(Plugin).FullName, false) != null))
             throw new DuplicateNameException("Multiple Talky plugin assemblies detected. Please remove legacy versions of Talky to use this.");
+
+        Plugin previous = Instance;
+        if (previous != null &&
+            (previous._enabled || previous._fullyEnabled ||
+             previous.HasOwnedLifecycleState()))
+        {
+            throw new InvalidOperationException(
+                "A previous Talky plugin instance still owns runtime state, subscriptions, " +
+                "settings, coroutines, or Harmony patches. Its Disable() must complete before " +
+                "another instance can be constructed.");
+        }
+
         Instance = this;
         WireExiledBridge();
         ExiledRegistration.TryRegisterNativePlugin();
     }
 
-    // Wires identity + lifecycle for the embedded EXILED shim (Talky.Exiled.dll). The shim reads
+    // Wires identity + lifecycle for the embedded EXILED shim (Talky.Exiled.Shim.dll). The shim reads
     // these through TalkyBridge so it needs no compile-time reference back to this assembly.
     // Harmless on LabAPI-only servers, where the shim is never loaded.
     private void WireExiledBridge()
@@ -72,17 +85,36 @@ public class Plugin : Plugin<Config>
         if (_enabled)
             return;
 
+        if (HasOwnedLifecycleState())
+        {
+            PerformanceMonitor?.Count(PerformanceCounter.LifecycleEnableFailures);
+            throw new InvalidOperationException(
+                "Talky cannot enable while subscriptions, runtime objects, settings, " +
+                "coroutines, or Harmony patches from an earlier lifecycle remain owned. " +
+                "Retry Disable() after resolving the cleanup failure.");
+        }
+
         _enabled = true;
         _fullyEnabled = false;
         int generation = ++_lifecycleGeneration;
+        long lifecycleStarted = PerformanceProfiler.NotSampled;
         try
         {
             Config ??= new Config();
-            ValidatePerformanceConfig();
+            int configCorrections = ValidateConfiguration();
+
+            PerformanceMonitor = new TalkyPerformanceMonitor(Config);
+            PerformanceMonitor.Count(PerformanceCounter.LifecycleEnableAttempts);
+            if (configCorrections != 0)
+            {
+                PerformanceMonitor.Count(
+                    PerformanceCounter.ConfigCorrections,
+                    configCorrections);
+            }
+            lifecycleStarted = PerformanceMonitor.Begin(PerformanceMetric.Lifecycle, 1);
 
             Settings = new SSTalkySettings();
             Settings.Activate();
-            PerformanceMonitor = new TalkyPerformanceMonitor(Config);
             Runtime = new TalkyRuntime();
             ApplyCurrentPerformancePolicy();
             Runtime.Enable();
@@ -95,16 +127,18 @@ public class Plugin : Plugin<Config>
                 SchedulePostEnable(generation, 0.1f);
             else
             {
+                _pluginsEnabledSubscribed = true;
                 ServerEvents.PluginsEnabled += OnPluginsEnabled;
                 // PluginsEnabled is an initial-load signal. A reload after that signal needs a
                 // bounded fallback so the plugin cannot remain half-enabled forever.
                 SchedulePostEnable(generation, 1f);
             }
 
-            Logger.Warn("Talky was enabled.");
+            Logger.Info("Talky was enabled.");
         }
         catch
         {
+            PerformanceMonitor?.Count(PerformanceCounter.LifecycleEnableFailures);
             try
             {
                 Disable();
@@ -116,14 +150,24 @@ public class Plugin : Plugin<Config>
 
             throw;
         }
+        finally
+        {
+            PerformanceMonitor?.End(PerformanceMetric.Lifecycle, lifecycleStarted);
+        }
     }
     
  
     public override void Disable()
     {
+        TalkyPerformanceMonitor lifecycleMonitor = PerformanceMonitor;
+        PublishLifecycleState(TalkyDiagnosticsLifecycleState.Disabling);
+        lifecycleMonitor?.Count(PerformanceCounter.LifecycleDisableAttempts);
+        long lifecycleStarted = lifecycleMonitor?.Begin(PerformanceMetric.Lifecycle, 1) ??
+                                PerformanceProfiler.NotSampled;
         bool hadOwnedState =
             _enabled ||
             _fullyEnabled ||
+            _pluginsEnabledSubscribed ||
             _postEnableHandle.IsValid ||
             Runtime != null ||
             VoiceChattingHandler != null ||
@@ -134,17 +178,23 @@ public class Plugin : Plugin<Config>
         _enabled = false;
         _fullyEnabled = false;
         ++_lifecycleGeneration;
-        TryCleanup(
-            "unsubscribe the PluginsEnabled callback",
-            () => ServerEvents.PluginsEnabled -= OnPluginsEnabled);
+        if (_pluginsEnabledSubscribed &&
+            TryCleanup(
+                "unsubscribe the PluginsEnabled callback",
+                () => ServerEvents.PluginsEnabled -= OnPluginsEnabled))
+        {
+            _pluginsEnabledSubscribed = false;
+        }
 
         CoroutineHandle postEnableHandle = _postEnableHandle;
-        _postEnableHandle = default;
         if (postEnableHandle.IsValid)
         {
-            TryCleanup(
+            if (TryCleanup(
                 "cancel delayed post-enable setup",
-                () => Timing.KillCoroutines(postEnableHandle));
+                () => Timing.KillCoroutines(postEnableHandle)))
+            {
+                _postEnableHandle = default;
+            }
         }
 
         TalkyRuntime runtime = Runtime;
@@ -180,19 +230,46 @@ public class Plugin : Plugin<Config>
             Settings = null;
         }
 
+        bool hasNonMonitorResidue =
+            HasOwnedLifecycleState(includePerformanceMonitor: false);
+        PublishLifecycleState(
+            hasNonMonitorResidue
+                ? TalkyDiagnosticsLifecycleState.Faulted
+                : TalkyDiagnosticsLifecycleState.Disabled);
+        lifecycleMonitor?.End(PerformanceMetric.Lifecycle, lifecycleStarted);
+
+        // Keep diagnostics readable while cleanup is unresolved. A later Disable() retry will
+        // reuse the monitor, record the retry, and dispose it only after all other ownership is
+        // demonstrably gone.
         TalkyPerformanceMonitor performanceMonitor = PerformanceMonitor;
-        if (performanceMonitor != null &&
-            TryCleanup("dispose the performance monitor", performanceMonitor.Dispose))
+        if (!hasNonMonitorResidue && performanceMonitor != null)
         {
-            PerformanceMonitor = null;
+            bool monitorCleanupSucceeded = TryCleanup(
+                "dispose the performance monitor",
+                performanceMonitor.Dispose);
+            if (monitorCleanupSucceeded)
+                PerformanceMonitor = null;
+            else
+                PublishLifecycleState(TalkyDiagnosticsLifecycleState.Faulted);
         }
 
         if (hadOwnedState)
             Logger.Warn("Talky was disabled.");
+
+        if (HasOwnedLifecycleState())
+        {
+            Logger.Error(
+                "Talky cleanup is incomplete. Ownership references were retained and a new " +
+                "Enable() will be refused until Disable() succeeds.");
+        }
     }
 
     private static bool TryCleanup(string operation, Action cleanup)
     {
+        TalkyPerformanceMonitor monitor = Instance?.PerformanceMonitor;
+        monitor?.Count(PerformanceCounter.LifecycleCleanupAttempts);
+        long started = monitor?.Begin(PerformanceMetric.Lifecycle, 1) ??
+                       PerformanceProfiler.NotSampled;
         try
         {
             cleanup();
@@ -200,20 +277,76 @@ public class Plugin : Plugin<Config>
         }
         catch (Exception exception)
         {
+            monitor?.Count(PerformanceCounter.CleanupFailures);
             Logger.Error($"Talky failed to {operation}: {exception}");
             return false;
         }
+        finally
+        {
+            monitor?.End(PerformanceMetric.Lifecycle, started);
+        }
+    }
+
+    private void PublishLifecycleState(TalkyDiagnosticsLifecycleState lifecycle)
+    {
+        TalkyPerformanceMonitor monitor = PerformanceMonitor;
+        if (monitor == null)
+            return;
+
+        long subscriptionGroups = 0L;
+        if (_pluginsEnabledSubscribed)
+            subscriptionGroups++;
+        if (Runtime?.HasUpdateSubscription == true)
+            subscriptionGroups++;
+        if (VoiceChattingHandler?.IsRegistered == true)
+            subscriptionGroups++;
+        if (FakeLookHandler?.HasEventSubscriptions == true)
+            subscriptionGroups++;
+        if (Settings?.HasEventSubscription == true)
+            subscriptionGroups++;
+
+        monitor.SetGauge(
+            PerformanceCounter.OwnedSubscriptionGroupsCurrent,
+            subscriptionGroups);
+        monitor.SetDiagnosticsLifecycleState(lifecycle);
     }
 
     private static void RemoveCedModPatchIfPresent()
     {
-        if (HarmonyBridge.HarmonyPresent())
+        if (HarmonyBridge.HarmonyPresent() || HarmonyBridge.HasOwnedPatchState())
             HarmonyBridge.RemovePatches();
+    }
+
+    private bool HasOwnedLifecycleState(bool includePerformanceMonitor = true)
+    {
+        return _pluginsEnabledSubscribed ||
+               _postEnableHandle.IsValid ||
+               Runtime != null ||
+               VoiceChattingHandler != null ||
+               FakeLookHandler != null ||
+               Settings != null ||
+               (includePerformanceMonitor && PerformanceMonitor != null) ||
+               HarmonyBridge.HasOwnedPatchState();
     }
 
     public void OnPluginsEnabled()
     {
-        ServerEvents.PluginsEnabled -= OnPluginsEnabled;
+        if (_pluginsEnabledSubscribed)
+        {
+            try
+            {
+                ServerEvents.PluginsEnabled -= OnPluginsEnabled;
+                _pluginsEnabledSubscribed = false;
+            }
+            catch (Exception exception)
+            {
+                PerformanceMonitor?.Count(PerformanceCounter.CleanupFailures);
+                Logger.Error(
+                    "Talky could not release its PluginsEnabled callback; cleanup will retry: " +
+                    exception);
+            }
+        }
+
         if (!_enabled)
             return;
 
@@ -223,7 +356,10 @@ public class Plugin : Plugin<Config>
     private void SchedulePostEnable(int generation, float delay)
     {
         if (_postEnableHandle.IsValid)
+        {
             Timing.KillCoroutines(_postEnableHandle);
+            _postEnableHandle = default;
+        }
 
         _postEnableHandle = Timing.CallDelayed(delay, () => CompleteEnable(generation));
     }
@@ -237,6 +373,9 @@ public class Plugin : Plugin<Config>
             return;
         }
 
+        TalkyPerformanceMonitor monitor = PerformanceMonitor;
+        long lifecycleStarted = monitor?.Begin(PerformanceMetric.Lifecycle, 1) ??
+                                PerformanceProfiler.NotSampled;
         try
         {
             CedModRuntimeProbe labApiProbe = CedModBridge.ProbeCandidates(
@@ -264,6 +403,12 @@ public class Plugin : Plugin<Config>
                     patchApplied = HarmonyBridge.ApplyPatches(
                         selectedProbe.Assembly,
                         out patchDetail);
+                    if (!patchApplied && HarmonyBridge.HasOwnedPatchState())
+                    {
+                        throw new InvalidOperationException(
+                            "Talky cannot continue while a failed CedMod patch attempt " +
+                            "retains possible Harmony ownership.");
+                    }
                 }
             }
             else
@@ -277,6 +422,8 @@ public class Plugin : Plugin<Config>
             FakeLookHandler.ConfigureSyncMode(plan.Mode);
             FakeLookHandler.RegisterEvents();
             _fullyEnabled = true;
+            PublishCompatibilityIdentity(selection, plan, patchApplied);
+            PublishLifecycleState(TalkyDiagnosticsLifecycleState.Enabled);
 
             LogCedModCompatibility(
                 labApiProbe,
@@ -288,6 +435,7 @@ public class Plugin : Plugin<Config>
         }
         catch (Exception exception)
         {
+            PublishLifecycleState(TalkyDiagnosticsLifecycleState.Faulted);
             Logger.Error("Talky post-enable setup failed: " + exception);
             bool eventCleanupSucceeded = true;
             try
@@ -300,13 +448,14 @@ public class Plugin : Plugin<Config>
                 Logger.Error("Talky failed to remove partial event subscriptions: " + cleanupException);
             }
 
-            TryCleanup("remove the CedMod sync patch", RemoveCedModPatchIfPresent);
+            bool patchCleanupSucceeded =
+                TryCleanup("remove the CedMod sync patch", RemoveCedModPatchIfPresent);
 
-            if (!eventCleanupSucceeded)
+            if (!eventCleanupSucceeded || !patchCleanupSucceeded)
             {
                 Logger.Error(
-                    "Talky will disable instead of re-registering over an unknown partial " +
-                    "event state.");
+                    "Talky will disable instead of re-registering over unresolved event or " +
+                    "Harmony ownership.");
                 Disable();
                 return;
             }
@@ -316,6 +465,14 @@ public class Plugin : Plugin<Config>
                 FakeLookHandler.ConfigureSyncMode(CedModLookSyncMode.CedModUnsupported);
                 FakeLookHandler.RegisterEvents();
                 _fullyEnabled = true;
+                monitor?.SetDiagnosticsCompatibilityIdentity(
+                    HarmonyBridge.HarmonyPresent()
+                        ? TalkyDiagnosticsTrustState.Failed
+                        : TalkyDiagnosticsTrustState.NotPresent,
+                    TalkyDiagnosticsTrustState.Rejected,
+                    true,
+                    CedModLookSyncMode.CedModUnsupported);
+                PublishLifecycleState(TalkyDiagnosticsLifecycleState.Enabled);
                 Logger.Error(
                     "Talky recovered in common-events-only mode; outbound head-sync " +
                     "rewriting is disabled, while other Talky features remain enabled.");
@@ -326,15 +483,96 @@ public class Plugin : Plugin<Config>
                 Disable();
             }
         }
+        finally
+        {
+            monitor?.End(PerformanceMetric.Lifecycle, lifecycleStarted);
+        }
+    }
+
+    private void PublishCompatibilityIdentity(
+        CedModSelection selection,
+        CedModLookSyncPlan plan,
+        bool patchApplied)
+    {
+        bool harmonyPresent = HarmonyBridge.HarmonyPresent();
+        TalkyDiagnosticsTrustState harmonyState = !harmonyPresent
+            ? TalkyDiagnosticsTrustState.NotPresent
+            : selection.State == CedModPluginState.FakeSync
+                ? patchApplied
+                    ? TalkyDiagnosticsTrustState.Verified
+                    : TalkyDiagnosticsTrustState.Failed
+                : TalkyDiagnosticsTrustState.Unknown;
+
+        TalkyDiagnosticsTrustState cedModState;
+        switch (selection.State)
+        {
+            case CedModPluginState.NotPresent:
+                cedModState = TalkyDiagnosticsTrustState.NotPresent;
+                break;
+            case CedModPluginState.FakeSync when patchApplied:
+                cedModState = TalkyDiagnosticsTrustState.Verified;
+                break;
+            case CedModPluginState.FakeSync when !harmonyPresent:
+                // The semantic verifier is part of patch admission and could not run.
+                cedModState = TalkyDiagnosticsTrustState.Unknown;
+                break;
+            case CedModPluginState.FakeSync:
+            case CedModPluginState.Unreadable:
+                cedModState = TalkyDiagnosticsTrustState.Rejected;
+                break;
+            default:
+                // Stock-sync CedMod is configuration-compatible, but its binary is not part of
+                // the narrower fake-sync rewrite allowlist.
+                cedModState = TalkyDiagnosticsTrustState.Unknown;
+                break;
+        }
+
+        PerformanceMonitor?.SetDiagnosticsCompatibilityIdentity(
+            harmonyState,
+            cedModState,
+            true,
+            plan.Mode);
     }
 
     public override void LoadConfigs()
     {
         base.LoadConfigs();
         Config ??= new Config();
-        ValidatePerformanceConfig();
+        int corrections = ValidateConfiguration();
         PerformanceMonitor?.Reconfigure(Config);
-        ApplyCurrentPerformancePolicy();
+        PerformanceMonitor?.Count(PerformanceCounter.ConfigCorrections, corrections);
+        long started = PerformanceMonitor?.Begin(PerformanceMetric.ConfigReload, 1) ??
+                       PerformanceProfiler.NotSampled;
+        try
+        {
+            Runtime?.ResetFailureQuarantine();
+            ApplyCurrentPerformancePolicy();
+            Runtime?.RefreshDiagnosticsGauges();
+            PublishLifecycleState(
+                _fullyEnabled
+                    ? TalkyDiagnosticsLifecycleState.Enabled
+                    : _enabled
+                        ? TalkyDiagnosticsLifecycleState.Enabling
+                        : TalkyDiagnosticsLifecycleState.Disabled);
+        }
+        finally
+        {
+            PerformanceMonitor?.End(PerformanceMetric.ConfigReload, started);
+        }
+    }
+
+    /// <summary>
+    /// Returns the last completed aggregate diagnostics publication. The returned schema-v1
+    /// object is immutable and contains no player identifiers or captured voice data.
+    /// </summary>
+    public bool TryGetDiagnosticsSnapshot(out TalkyDiagnosticsSnapshot snapshot)
+    {
+        TalkyPerformanceMonitor monitor = PerformanceMonitor;
+        if (monitor != null)
+            return monitor.TryGetDiagnosticsSnapshot(out snapshot);
+
+        snapshot = null;
+        return false;
     }
 
     internal void ApplyCurrentPerformancePolicy()
@@ -347,16 +585,30 @@ public class Plugin : Plugin<Config>
         Runtime.ApplyPerformancePolicy(policy);
     }
 
-    private void ValidatePerformanceConfig()
+    private int ValidateConfiguration()
     {
+        FunctionalConfigValidationResult functionalValidation =
+            FunctionalConfigValidator.ValidateAndApply(Config);
         PerformanceConfigValidationResult validation =
             PerformanceConfigValidator.ValidateAndApply(Config);
+        int correctionCount =
+            functionalValidation.CorrectionCount + validation.CorrectionCount;
+
+        if (functionalValidation.WasCorrected)
+        {
+            Logger.Warn(
+                $"Talky corrected {functionalValidation.CorrectionCount} functional " +
+                $"setting(s): {functionalValidation.CorrectionSummary}");
+        }
+
         if (validation.WasCorrected)
         {
             Logger.Warn(
                 $"Talky corrected {validation.CorrectionCount} performance setting(s): " +
                 validation.CorrectionSummary);
         }
+
+        return correctionCount;
     }
         
     private void LogCedModCompatibility(

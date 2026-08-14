@@ -15,6 +15,7 @@ public sealed class VoiceChattingHandler
         new Dictionary<uint, SpeechTracker>();
 
     private bool _registered;
+    public bool IsRegistered => _registered;
 
     /// <summary>
     /// Compatibility view for integrations that previously read the handler cache.
@@ -32,7 +33,11 @@ public sealed class VoiceChattingHandler
             VoiceChatChannel.Intercom or
             VoiceChatChannel.Scp1576)
         {
-            Runtime?.HandleVoice(ev.Player.NetworkId, ev.Message.Data, ev.Message.DataLength);
+            Runtime?.HandleVoice(
+                ev.Player.NetworkId,
+                ev.Message.Data,
+                ev.Message.DataLength,
+                ev.Message.Channel);
         }
     }
 

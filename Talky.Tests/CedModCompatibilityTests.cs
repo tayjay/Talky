@@ -11,11 +11,55 @@ internal static class CedModCompatibilityTests
     {
         _assertions = 0;
         TestConfigurationInspection();
+        TestBinaryCompatibilityManifest();
         TestLoaderSelection();
         TestModeResolution();
         TestPerInvocationRewriteState();
         TestRewriteCommitCoherence();
         return _assertions;
+    }
+
+    private static void TestBinaryCompatibilityManifest()
+    {
+        True(
+            CedModBinaryCompatibilityPolicy.TryMatch(
+                "6e84e866-4a89-4aa4-9dea-d44e17ab7b86",
+                "30086CB8CEC8BF5309F89B6F58F6175F2BAB8D63B75A772EC82DC9B143B4B975",
+                "941A7ABA51B95D2FDECBD64D68B6EAD2FFA42134C3FB669B7E93EF56EA34CAEF",
+                out CedModBinaryIdentity labApi) &&
+            labApi.Release == "3.4.32" &&
+            labApi.Framework == "LabAPI",
+            "Exact CedMod 3.4.32 LabAPI identity is allowlisted");
+        True(
+            CedModBinaryCompatibilityPolicy.TryMatch(
+                "6DBE00FE-70A3-4A36-81FC-AABC3F4A7907",
+                "5bf15997efb812d04eee15a669363cc7191eb787a1972d80eba033f555af190e",
+                "feba6304521c1f12c46dfeb9789a996a77ab367450882e37a6bd700df7d60768",
+                out CedModBinaryIdentity exiled) &&
+            exiled.Release == "3.4.32" &&
+            exiled.Framework == "EXILED",
+            "Exact CedMod 3.4.32 EXILED identity is case-insensitively allowlisted");
+        True(
+            !CedModBinaryCompatibilityPolicy.TryMatch(
+                "00000000-0000-0000-0000-000000000000",
+                labApi.PrefixIlSha256,
+                labApi.HelperIlSha256,
+                out _),
+            "Unknown CedMod MVID fails closed");
+        True(
+            !CedModBinaryCompatibilityPolicy.TryMatch(
+                labApi.ModuleVersionId,
+                new string('0', 64),
+                labApi.HelperIlSha256,
+                out _),
+            "Changed CedMod prefix IL fails closed");
+        True(
+            !CedModBinaryCompatibilityPolicy.TryMatch(
+                labApi.ModuleVersionId,
+                labApi.PrefixIlSha256,
+                new string('F', 64),
+                out _),
+            "Changed CedMod helper IL fails closed");
     }
 
     private static void TestConfigurationInspection()

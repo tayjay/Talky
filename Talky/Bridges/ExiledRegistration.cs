@@ -12,7 +12,7 @@ using Talky.Core;              // TalkyBridge
 namespace Talky.Bridges;
 
 /// <summary>
-/// On an EXILED server, loads the embedded Talky.Exiled shim assembly and registers its plugin
+/// On an EXILED server, loads the embedded Talky.Exiled.Shim assembly and registers its plugin
 /// type directly into EXILED's native plugin set (<see cref="Loader.Plugins"/>). No-ops entirely
 /// when EXILED isn't present, so a LabAPI-only server never touches an EXILED type or the shim.
 /// </summary>
@@ -21,7 +21,7 @@ public static class ExiledRegistration
     // Manifest-resource name of the embedded shim. The ".bin" suffix keeps LabAPI/EXILED's
     // auto-extractors (which only grab "*.dll"/"*.dll.compressed") from loading it on LabAPI-only
     // servers; we load it ourselves, here, only when EXILED is present.
-    private const string ShimResource = "Talky.Exiled.dll.bin";
+    private const string ShimResource = "Talky.Exiled.Shim.dll.bin";
 
     private static Type _pluginType;
 

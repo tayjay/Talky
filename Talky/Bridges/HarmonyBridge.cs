@@ -15,6 +15,159 @@ namespace Talky.Bridges;
 internal static class HarmonyBridge
 {
     internal const string OwnerId = "ca.taytay.talky.cedmod-sync";
+    private const string OwnershipStateKey = "Talky.HarmonyOwnership.ca.taytay.talky.cedmod-sync";
+    private static int _runtimeOwnershipPossible;
+
+    /// <summary>
+    /// This facade deliberately has no HarmonyLib-typed fields, parameters, return values, or
+    /// locals. LabAPI installations are allowed to omit Harmony entirely, so the CLR must be able
+    /// to load and execute these lifecycle guards without resolving the optional assembly.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool HarmonyPresent()
+    {
+        return AppDomain.CurrentDomain.GetAssemblies().Any(assembly =>
+            string.Equals(
+                assembly.GetName().Name,
+                "0Harmony",
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool HasOwnedPatchState()
+    {
+        if (!RuntimeOwnershipPossible())
+            return false;
+
+        if (!HarmonyBridge.HarmonyPresent())
+            return true;
+
+        try
+        {
+            bool owned = HasOwnedPatchStateWithHarmony();
+            if (!owned)
+                ClearRuntimeOwnershipPossible();
+            return owned;
+        }
+        catch
+        {
+            // Once Talky has entered the patch implementation, an incompatible/unreadable
+            // Harmony runtime cannot prove ownership was released. Fail closed for re-enable.
+            return true;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static bool ApplyPatches(Assembly cedModAssembly, out string detail)
+    {
+        if (!HarmonyPresent())
+        {
+            detail = "0Harmony is not loaded";
+            return false;
+        }
+
+        try
+        {
+            return ApplyPatchesWithHarmony(cedModAssembly, out detail);
+        }
+        catch (Exception exception)
+        {
+            detail = "Harmony runtime is incompatible: " + exception.GetType().Name;
+            return false;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public static void RemovePatches()
+    {
+        // If Harmony has never been loaded, Talky cannot have installed a Harmony patch in this
+        // AppDomain. Avoid touching the implementation type so optional-dependency resolution
+        // remains genuinely lazy.
+        if (!RuntimeOwnershipPossible())
+            return;
+
+        if (!HarmonyPresent())
+        {
+            throw new InvalidOperationException(
+                "Talky retains possible Harmony patch ownership but 0Harmony is unavailable.");
+        }
+
+        try
+        {
+            RemovePatchesWithHarmony();
+            ClearRuntimeOwnershipPossible();
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                "Talky could not verify removal of its Harmony patch ownership.",
+                exception);
+        }
+    }
+
+    internal static void MarkRuntimeOwnershipPossible()
+    {
+        Interlocked.Exchange(ref _runtimeOwnershipPossible, 1);
+        try
+        {
+            AppDomain.CurrentDomain.SetData(OwnershipStateKey, true);
+        }
+        catch
+        {
+            // The in-assembly marker still preserves ownership for this loaded instance.
+        }
+    }
+
+    internal static void ClearRuntimeOwnershipPossible()
+    {
+        Interlocked.Exchange(ref _runtimeOwnershipPossible, 0);
+        try
+        {
+            AppDomain.CurrentDomain.SetData(OwnershipStateKey, false);
+        }
+        catch
+        {
+            // Clearing the process-wide marker is best effort after verified local cleanup.
+        }
+    }
+
+    private static bool RuntimeOwnershipPossible()
+    {
+        if (Volatile.Read(ref _runtimeOwnershipPossible) != 0)
+            return true;
+
+        try
+        {
+            return AppDomain.CurrentDomain.GetData(OwnershipStateKey) is bool owned && owned;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool HasOwnedPatchStateWithHarmony() =>
+        HarmonyRuntimeBridge.HasOwnedPatchState();
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool ApplyPatchesWithHarmony(
+        Assembly cedModAssembly,
+        out string detail) =>
+        HarmonyRuntimeBridge.ApplyPatches(cedModAssembly, out detail);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RemovePatchesWithHarmony() =>
+        HarmonyRuntimeBridge.RemovePatches();
+}
+
+/// <summary>
+/// Harmony-dependent implementation. No method on this type is reached until the dependency-free
+/// facade has proved that 0Harmony is already loaded by the host.
+/// </summary>
+internal static class HarmonyRuntimeBridge
+{
+    private const string OwnerId = HarmonyBridge.OwnerId;
 
     private const string CedModPatchTypeName =
         "CedMod.Addons.Sentinal.Patches.FpcServerPositionDistributorPatch";
@@ -29,10 +182,10 @@ internal static class HarmonyBridge
         typeof(bool),
     };
 
-    private static readonly MethodInfo PrefixMethod = typeof(HarmonyBridge).GetMethod(
+    private static readonly MethodInfo PrefixMethod = typeof(HarmonyRuntimeBridge).GetMethod(
         nameof(Prefix),
         BindingFlags.Static | BindingFlags.NonPublic);
-    private static readonly MethodInfo PostfixMethod = typeof(HarmonyBridge).GetMethod(
+    private static readonly MethodInfo PostfixMethod = typeof(HarmonyRuntimeBridge).GetMethod(
         nameof(Postfix),
         BindingFlags.Static | BindingFlags.NonPublic);
 
@@ -41,19 +194,36 @@ internal static class HarmonyBridge
     private static bool _patched;
     private static int _callbackFailureLogged;
 
+    /// <summary>
+    /// Reports both locally retained patch state and owner-scoped Harmony patches left by an
+    /// interrupted reload. This is a cold lifecycle check; callback paths never enumerate
+    /// Harmony's patch registry.
+    /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool HarmonyPresent()
+    public static bool HasOwnedPatchState()
     {
-        return AppDomain.CurrentDomain.GetAssemblies().Any(assembly =>
-            string.Equals(
-                assembly.GetName().Name,
-                "0Harmony",
-                StringComparison.OrdinalIgnoreCase));
+        if (_patched || _target != null || _harmony != null)
+            return true;
+
+        if (!HarmonyBridge.HarmonyPresent())
+            return false;
+
+        try
+        {
+            return HasHarmonyOwnerPatches();
+        }
+        catch
+        {
+            // An unreadable Harmony registry cannot prove that no Talky-owned patch remains.
+            return true;
+        }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool ApplyPatches(Assembly cedModAssembly, out string detail)
     {
+        HarmonyBridge.MarkRuntimeOwnershipPossible();
+
         if (cedModAssembly == null)
         {
             RemovePatches();
@@ -61,7 +231,7 @@ internal static class HarmonyBridge
             return false;
         }
 
-        if (!HarmonyPresent())
+        if (!HarmonyBridge.HarmonyPresent())
         {
             detail = "0Harmony is not loaded";
             return false;
@@ -122,6 +292,24 @@ internal static class HarmonyBridge
                 return false;
             }
 
+            if (PrefixMethod == null || PostfixMethod == null)
+            {
+                RemovePatchesInternal();
+                detail = "Talky Harmony callback methods could not be resolved";
+                return false;
+            }
+
+            if (!CedModBinaryVerifier.TryVerify(
+                    sentinalPrefix,
+                    target,
+                    out _,
+                    out string semanticDetail))
+            {
+                RemovePatchesInternal();
+                detail = semanticDetail;
+                return false;
+            }
+
             Patches writeAllPatches = Harmony.GetPatchInfo(writeAll);
             Patch sentinalPatch = writeAllPatches?.Prefixes.FirstOrDefault(patch =>
                 Equals(patch.PatchMethod, sentinalPrefix));
@@ -136,7 +324,8 @@ internal static class HarmonyBridge
 
             if (_patched && Equals(_target, target) && VerifyPatch(target))
             {
-                detail = DescribePatch(target, sentinalOwner, true);
+                detail = semanticDetail + "; " +
+                         DescribePatch(target, sentinalOwner, true);
                 return true;
             }
 
@@ -168,7 +357,8 @@ internal static class HarmonyBridge
 
             _patched = true;
             Interlocked.Exchange(ref _callbackFailureLogged, 0);
-            detail = DescribePatch(target, sentinalOwner, true);
+            detail = semanticDetail + "; " +
+                     DescribePatch(target, sentinalOwner, true);
             return true;
         }
         catch (Exception exception)
@@ -202,8 +392,16 @@ internal static class HarmonyBridge
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void RemovePatches()
     {
-        if (!HarmonyPresent())
+        if (!HarmonyBridge.HarmonyPresent())
+        {
+            if (_patched || _target != null || _harmony != null)
+            {
+                throw new InvalidOperationException(
+                    "Talky retains CedMod patch ownership but Harmony is unavailable.");
+            }
+
             return;
+        }
 
         try
         {
@@ -213,20 +411,51 @@ internal static class HarmonyBridge
         {
             Logger.Error("Talky failed to remove its CedMod sync patch: " + exception);
             // Keep the target and owner handle so a later Disable can retry cleanup.
+            throw;
         }
     }
 
     private static void RemovePatchesInternal()
     {
+        Harmony harmony = _harmony ?? new Harmony(OwnerId);
         if (_target != null)
         {
-            (_harmony ?? new Harmony(OwnerId)).Unpatch(
+            harmony.Unpatch(
                 _target,
                 HarmonyPatchType.All,
                 OwnerId);
         }
 
+        // A previous plugin instance may have lost its MethodInfo handle while Harmony retained
+        // the owner-scoped patch. Sweep only this plugin's owner id and verify it is gone.
+        foreach (MethodBase method in Harmony.GetAllPatchedMethods().ToArray())
+        {
+            Patches patches = Harmony.GetPatchInfo(method);
+            if (patches?.Owners?.Contains(OwnerId) == true)
+                harmony.Unpatch(method, HarmonyPatchType.All, OwnerId);
+        }
+
+        if (HasHarmonyOwnerPatches())
+        {
+            _harmony = harmony;
+            _patched = true;
+            throw new InvalidOperationException(
+                "Harmony still reports Talky-owned CedMod patches after cleanup.");
+        }
+
         ClearPatchState();
+    }
+
+    private static bool HasHarmonyOwnerPatches()
+    {
+        foreach (MethodBase method in Harmony.GetAllPatchedMethods())
+        {
+            Patches patches = Harmony.GetPatchInfo(method);
+            if (patches?.Owners?.Contains(OwnerId) == true)
+                return true;
+        }
+
+        return false;
     }
 
     private static void ClearPatchState()
@@ -235,6 +464,7 @@ internal static class HarmonyBridge
         _target = null;
         _patched = false;
         Interlocked.Exchange(ref _callbackFailureLogged, 0);
+        HarmonyBridge.ClearRuntimeOwnershipPossible();
     }
 
     private static bool TryUnpatch(MethodInfo target)

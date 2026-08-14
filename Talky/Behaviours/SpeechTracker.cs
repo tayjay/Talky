@@ -1,13 +1,16 @@
 using System;
+using System.Diagnostics;
 using LabApi.Features.Wrappers;
 using PlayerRoles;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using Talky.Performance;
+using Talky.Security;
 using Talky.Settings;
 using Talky.Voice;
 using UnityEngine;
 using VoiceChat.Codec;
 using Logger = LabApi.Features.Console.Logger;
+using PerformanceCounter = Talky.Performance.PerformanceCounter;
 
 namespace Talky.Behaviours;
 
@@ -21,8 +24,13 @@ public sealed class SpeechTracker : MonoBehaviour
     private const float SpeechRangeContinuityGapSeconds = 0.25f;
     private const float MinimumAdaptiveVolumeRatio = 0.15f;
 
+    private static readonly VoiceFailureDiagnosticGate VoiceFailureDiagnostics =
+        new VoiceFailureDiagnosticGate();
+
     private readonly RollingVoiceEnergy _energy = new RollingVoiceEnergy();
     private readonly float[] _samples = new float[480];
+    private readonly VoiceAnalysisCircuitBreaker _voiceAnalysisBreaker =
+        new VoiceAnalysisCircuitBreaker();
     private readonly RollingSpeechPercentiles _speechPercentiles =
         new RollingSpeechPercentiles();
     private readonly VoicePresentationState _voicePresentation =
@@ -174,10 +182,8 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_disposed || _player == null)
             return;
 
-        try
-        {
-            if (_overrideEndTime > now)
-                return;
+        if (_overrideEndTime > now)
+            return;
 
             if (_overrideEndTime != 0f)
             {
@@ -237,22 +243,17 @@ public sealed class SpeechTracker : MonoBehaviour
                 return;
 
             _lastLevel = level;
-            switch (level)
-            {
-                case SpeechLevel.Silent:
-                    ApplyEmotion(EmotionPresetType.Neutral);
-                    break;
-                case SpeechLevel.Quiet:
-                    ApplyEmotion(EmotionPresetType.Happy);
-                    break;
-                case SpeechLevel.Loud:
-                    ApplyEmotion(EmotionPresetType.Scared);
-                    break;
-            }
-        }
-        catch (Exception exception)
+        switch (level)
         {
-            Logger.Debug(exception, Plugin.Instance?.Config?.Debug == true);
+            case SpeechLevel.Silent:
+                ApplyEmotion(EmotionPresetType.Neutral);
+                break;
+            case SpeechLevel.Quiet:
+                ApplyEmotion(EmotionPresetType.Happy);
+                break;
+            case SpeechLevel.Loud:
+                ApplyEmotion(EmotionPresetType.Scared);
+                break;
         }
     }
 
@@ -275,17 +276,35 @@ public sealed class SpeechTracker : MonoBehaviour
 
     internal int DecodeVoicePacket(byte[] data, int length, float now)
     {
-        if (_disposed || _player == null || _player.IsDestroyed ||
-            data == null || length <= 0)
+        if (_disposed || _player == null || _player.IsDestroyed)
             return 0;
+
+        TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
+        double analysisNow = MonotonicSeconds();
+        if (VoicePacketBoundsPolicy.Validate(data, length) != VoicePacketValidationResult.Valid)
+        {
+            monitor?.Count(PerformanceCounter.VoiceInvalidPackets);
+            RecordVoiceAnalysisFailure(monitor, analysisNow);
+            return 0;
+        }
+
+        monitor?.Count(PerformanceCounter.VoiceBytes, length);
+        monitor?.Count(VoicePayloadCounter(length));
+        if (_voiceAnalysisBreaker.IsSuspended(analysisNow))
+        {
+            monitor?.Count(PerformanceCounter.VoiceAnalysisSkips);
+            return 0;
+        }
 
         try
         {
             OpusDecoder decoder = OpusDecoder;
             if (decoder == null)
+            {
+                monitor?.Count(PerformanceCounter.VoiceAnalysisSkips);
                 return 0;
+            }
 
-            TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
             long decodeStarted = monitor?.Begin(PerformanceMetric.OpusDecode) ?? -1L;
             int decoded;
             try
@@ -297,26 +316,33 @@ public sealed class SpeechTracker : MonoBehaviour
                 monitor?.End(PerformanceMetric.OpusDecode, decodeStarted);
             }
 
-            if (decoded > 0)
+            if (decoded <= 0)
             {
-                long energyStarted = monitor?.Begin(PerformanceMetric.EnergyUpdate) ?? -1L;
-                try
-                {
-                    PrepareSpeechRangeWrite(now);
-                    _energy.Write(_samples, decoded);
-                    ObserveSpeechRange(decoded);
-                }
-                finally
-                {
-                    monitor?.End(PerformanceMetric.EnergyUpdate, energyStarted);
-                }
+                monitor?.Count(PerformanceCounter.VoiceDecodeFailures);
+                RecordVoiceAnalysisFailure(monitor, analysisNow);
+                return 0;
             }
 
+            long energyStarted = monitor?.Begin(PerformanceMetric.EnergyUpdate) ?? -1L;
+            try
+            {
+                PrepareSpeechRangeWrite(now);
+                _energy.Write(_samples, decoded);
+                ObserveSpeechRange(decoded);
+            }
+            finally
+            {
+                monitor?.End(PerformanceMetric.EnergyUpdate, energyStarted);
+            }
+
+            _voiceAnalysisBreaker.RecordSuccess(analysisNow);
+            monitor?.Count(PerformanceCounter.VoiceDecodeSuccesses);
             return decoded;
         }
-        catch (Exception exception)
+        catch (Exception)
         {
-            Logger.Debug("Error decoding voice message: " + exception, Plugin.Instance?.Config?.Debug == true);
+            monitor?.Count(PerformanceCounter.VoiceDecodeFailures);
+            RecordVoiceAnalysisFailure(monitor, analysisNow);
             return 0;
         }
     }
@@ -352,7 +378,8 @@ public sealed class SpeechTracker : MonoBehaviour
 
     public void OverrideEmotion(EmotionPresetType preset, float durationSeconds)
     {
-        if (!ShouldAnimateFace || _disposed)
+        if (!ShouldAnimateFace || _disposed ||
+            Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
             return;
 
         _overridePreset = preset;
@@ -380,10 +407,16 @@ public sealed class SpeechTracker : MonoBehaviour
 
     public void Reset()
     {
+        ResetState(applyDefaultEmotion: true);
+    }
+
+    private void ResetState(bool applyDefaultEmotion)
+    {
         _energy.Reset();
         _speechPercentiles.Reset();
         ResetSpeechRangeObservationWindow();
         _voicePresentation.Reset();
+        _voiceAnalysisBreaker.Reset();
         ResetAudibleSpeech();
         CurrentVolumeRatio = 0f;
         _overrideEndTime = 0f;
@@ -391,7 +424,8 @@ public sealed class SpeechTracker : MonoBehaviour
         _hasAppliedPreset = false;
         RecentSpeakerIndex = -1;
         HasGlanceSnapshot = false;
-        ApplyEmotion(defaultPreset);
+        if (applyDefaultEmotion)
+            ApplyEmotion(defaultPreset);
     }
 
     public void Dispose()
@@ -399,11 +433,20 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_disposed)
             return;
 
-        Reset();
+        // Become inert before any reset operation. Teardown deliberately avoids Player.Emotion
+        // writes, which are not required to release Talky's ownership and can fail during a role
+        // transition or destroyed-player cleanup.
         _disposed = true;
-        RuntimeIndex = -1;
-        RecentSpeakerIndex = -1;
-        Proxy = null;
+        try
+        {
+            ResetState(applyDefaultEmotion: false);
+        }
+        finally
+        {
+            RuntimeIndex = -1;
+            RecentSpeakerIndex = -1;
+            Proxy = null;
+        }
     }
 
     private void OnDestroy()
@@ -470,6 +513,48 @@ public sealed class SpeechTracker : MonoBehaviour
     private void ResetAudibleSpeech()
     {
         _audibleSpeechActivity.Reset();
+    }
+
+    private void RecordVoiceAnalysisFailure(TalkyPerformanceMonitor monitor, double nowSeconds)
+    {
+        VoiceAnalysisFailureDisposition disposition =
+            _voiceAnalysisBreaker.RecordFailure(nowSeconds);
+        if (disposition == VoiceAnalysisFailureDisposition.BreakerActivated)
+            monitor?.Count(PerformanceCounter.VoiceBreakerActivations);
+
+        if (Plugin.Instance?.Config?.Debug != true ||
+            !VoiceFailureDiagnostics.RecordFailure(nowSeconds, out int aggregatedFailures))
+        {
+            return;
+        }
+
+        try
+        {
+            Logger.Debug(
+                "Talky voice analysis rejected or failed " + aggregatedFailures +
+                " packet(s) since the previous diagnostic.",
+                true);
+        }
+        catch (Exception)
+        {
+            // Diagnostics must never affect the stock voice path or Talky's analysis path.
+        }
+    }
+
+    private static double MonotonicSeconds() =>
+        Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+
+    private static PerformanceCounter VoicePayloadCounter(int length)
+    {
+        if (length <= 64)
+            return PerformanceCounter.VoicePayloadBytes1To64;
+        if (length <= 128)
+            return PerformanceCounter.VoicePayloadBytes65To128;
+        if (length <= 256)
+            return PerformanceCounter.VoicePayloadBytes129To256;
+        if (length <= 384)
+            return PerformanceCounter.VoicePayloadBytes257To384;
+        return PerformanceCounter.VoicePayloadBytes385To512;
     }
 
     private static bool IsFinite(double value) =>

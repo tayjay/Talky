@@ -6,19 +6,24 @@ namespace Talky.Performance;
 
 public readonly struct MetricSnapshot
 {
+    public const int ReliablePercentileSampleCount = 100;
     internal MetricSnapshot(
         long callCount,
         long sampleCount,
         double estimatedTotalMilliseconds,
         double averageMilliseconds,
+        double p50Milliseconds,
         double p95Milliseconds,
+        double p99Milliseconds,
         double maxMilliseconds)
     {
         CallCount = callCount;
         SampleCount = sampleCount;
         EstimatedTotalMilliseconds = estimatedTotalMilliseconds;
         AverageMilliseconds = averageMilliseconds;
+        P50Milliseconds = p50Milliseconds;
         P95Milliseconds = p95Milliseconds;
+        P99Milliseconds = p99Milliseconds;
         MaxMilliseconds = maxMilliseconds;
     }
 
@@ -26,8 +31,11 @@ public readonly struct MetricSnapshot
     public long SampleCount { get; }
     public double EstimatedTotalMilliseconds { get; }
     public double AverageMilliseconds { get; }
+    public double P50Milliseconds { get; }
     public double P95Milliseconds { get; }
+    public double P99Milliseconds { get; }
     public double MaxMilliseconds { get; }
+    public bool PercentilesLowConfidence => SampleCount < ReliablePercentileSampleCount;
 }
 
 /// <summary>
@@ -105,7 +113,9 @@ public sealed class PerformanceWindow
             samples,
             TicksToMilliseconds(estimatedTicks),
             TicksToMilliseconds(averageTicks),
+            MetricPercentileMilliseconds(index, samples, 0.50d),
             MetricPercentileMilliseconds(index, samples, 0.95d),
+            MetricPercentileMilliseconds(index, samples, 0.99d),
             TicksToMilliseconds(_metricMaximumTicks[index]));
     }
 
@@ -171,6 +181,19 @@ public sealed class PerformanceWindow
         _counters[counterIndex] += amount;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void SetCounter(int counterIndex, long value)
+    {
+        _counters[counterIndex] = value;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ObserveCounterMaximum(int counterIndex, long value)
+    {
+        if (value > _counters[counterIndex])
+            _counters[counterIndex] = value;
+    }
+
     internal void AddFrameTicks(long elapsedTicks)
     {
         if (elapsedTicks < 0)
@@ -187,6 +210,18 @@ public sealed class PerformanceWindow
     {
         for (int i = 0; i < FrameHistogramBucketCount; i++)
             destination[i] += _frameHistogram[i];
+    }
+
+    internal void AccumulateMetricHistogram(int metricIndex, long[] destination)
+    {
+        if (destination == null)
+            throw new ArgumentNullException(nameof(destination));
+        if (destination.Length < (int)PerformanceMetric.Count * HistogramBucketCount)
+            throw new ArgumentException("Metric histogram destination is too small.", nameof(destination));
+
+        int baseIndex = metricIndex * HistogramBucketCount;
+        for (int bucket = 0; bucket < HistogramBucketCount; bucket++)
+            destination[baseIndex + bucket] += _metricHistogram[baseIndex + bucket];
     }
 
     private double MetricPercentileMilliseconds(int metricIndex, long samples, double percentile)
@@ -424,6 +459,26 @@ public sealed class PerformanceProfiler
         _windows[_activeIndex].IncrementCounter(CounterIndex(counter), amount);
     }
 
+    /// <summary>Records the latest value of a point-in-time gauge in the active window.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void SetGauge(PerformanceCounter counter, long value)
+    {
+        if (PerformanceCounterCatalog.Aggregation(counter) != PerformanceCounterAggregation.Last)
+            throw new ArgumentException("Counter is not a latest-value gauge.", nameof(counter));
+
+        _windows[_activeIndex].SetCounter(CounterIndex(counter), value);
+    }
+
+    /// <summary>Records a maximum observation in the active window.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ObserveHighWater(PerformanceCounter counter, long value)
+    {
+        if (PerformanceCounterCatalog.Aggregation(counter) != PerformanceCounterAggregation.Maximum)
+            throw new ArgumentException("Counter is not a maximum gauge.", nameof(counter));
+
+        _windows[_activeIndex].ObserveCounterMaximum(CounterIndex(counter), value);
+    }
+
     public void RecordFrameMilliseconds(double milliseconds)
     {
         if (double.IsNaN(milliseconds) || double.IsInfinity(milliseconds) || milliseconds < 0d)
@@ -457,8 +512,38 @@ public sealed class PerformanceProfiler
         if (_activeIndex == _windows.Length)
             _activeIndex = 0;
         _windowGeneration++;
-        _windows[_activeIndex].Clear(timestamp);
+        PerformanceWindow next = _windows[_activeIndex];
+        next.Clear(timestamp);
+        CarryGauges(active, next);
         return true;
+    }
+
+    /// <summary>
+    /// Point-in-time gauges describe state, rather than events which happened in only one
+    /// interval. Carry only latest values into the next active window so unchanged state remains
+    /// truthful. Period maxima must age out; seed their new interval from the associated current
+    /// state rather than retaining the previous interval's peak.
+    /// </summary>
+    private static void CarryGauges(PerformanceWindow source, PerformanceWindow destination)
+    {
+        for (int index = 0; index < (int)PerformanceCounter.Count; index++)
+        {
+            PerformanceCounter counter = (PerformanceCounter)index;
+            long value = source.GetCounter(counter);
+            switch (PerformanceCounterCatalog.Aggregation(counter))
+            {
+                case PerformanceCounterAggregation.Last:
+                    destination.SetCounter(index, value);
+                    break;
+            }
+        }
+
+        destination.ObserveCounterMaximum(
+            (int)PerformanceCounter.PendingActionsHighWater,
+            source.GetCounter(PerformanceCounter.PendingActionsCurrent));
+        destination.ObserveCounterMaximum(
+            (int)PerformanceCounter.SimultaneousSpeakersHighWater,
+            source.GetCounter(PerformanceCounter.SimultaneousSpeakersCurrent));
     }
 
     public PerformanceWindow GetCompletedWindow(int age)

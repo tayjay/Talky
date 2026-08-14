@@ -20,9 +20,11 @@ public sealed class LookOverride : MonoBehaviour
     private Vector2 _reactOffset;
     private float _lastBusyTime;
     private bool _disposed;
+    private bool _glanceSelectedOnLastTick;
 
     internal int RuntimeIndex { get; set; } = -1;
     internal bool IsDisposed => _disposed;
+    internal bool GlanceSelectedOnLastTick => _glanceSelectedOnLastTick;
 
     public Player Player => _player;
     public ReferenceHub Hub => _player?.ReferenceHub;
@@ -87,6 +89,7 @@ public sealed class LookOverride : MonoBehaviour
         bool calculateGlance,
         TalkyRuntimePolicy policy)
     {
+        _glanceSelectedOnLastTick = false;
         if (_disposed || _player == null || policy == null)
             return 0;
 
@@ -156,7 +159,9 @@ public sealed class LookOverride : MonoBehaviour
     public void CauseReact(float damage)
     {
         Config config = TalkyConfig;
-        if (_disposed || config == null)
+        if (_disposed || config == null ||
+            Plugin.Instance?.Runtime?.IsEnabled != true ||
+            Plugin.Instance.Runtime.IsAnimationQuarantined)
             return;
 
         _reactOffset = new Vector2(0f, Math.Min(config.HeadBobAmount, damage));
@@ -190,10 +195,18 @@ public sealed class LookOverride : MonoBehaviour
         if (_disposed)
             return;
 
-        ClearOffsets();
+        // Make stale callbacks inert first and avoid notifying a runtime which may itself be in
+        // teardown. The runtime drops its active-target ownership separately.
         _disposed = true;
-        RuntimeIndex = -1;
-        _speechTracker = null;
+        try
+        {
+            ClearOffsets(false);
+        }
+        finally
+        {
+            RuntimeIndex = -1;
+            _speechTracker = null;
+        }
     }
 
     private void OnDestroy()
@@ -299,6 +312,8 @@ public sealed class LookOverride : MonoBehaviour
 
         if (!found)
             return candidates;
+
+        _glanceSelectedOnLastTick = true;
 
         Vector3 localDirection = camera.InverseTransformDirection(bestDirection);
         float yaw = Mathf.Atan2(localDirection.x, localDirection.z) * Mathf.Rad2Deg;

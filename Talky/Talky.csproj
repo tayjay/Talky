@@ -5,7 +5,14 @@
     <PropertyGroup>
         <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
         <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
-        <DeployPlugin Condition=" '$(DeployPlugin)' == '' ">true</DeployPlugin>
+        <DeployPlugin Condition=" '$(DeployPlugin)' == '' ">false</DeployPlugin>
+        <ScpSlManagedDir Condition=" '$(ScpSlManagedDir)' == '' ">$(SCPSL_MANAGED_DIR)</ScpSlManagedDir>
+        <ExiledDependenciesDir Condition=" '$(ExiledDependenciesDir)' == '' ">$(EXILED_DEPENDENCIES_DIR)</ExiledDependenciesDir>
+        <TalkyVerifyReferences>true</TalkyVerifyReferences>
+        <TalkyRequireGameReferences>true</TalkyRequireGameReferences>
+        <TalkyGenerateBuildInfo>true</TalkyGenerateBuildInfo>
+        <TalkyEnableDeployTarget>true</TalkyEnableDeployTarget>
+        <TalkyVersionPrefix>1.0.0</TalkyVersionPrefix>
         <ProjectGuid>{2E2D2E00-82AF-4B6B-820C-4803490F47DE}</ProjectGuid>
         <OutputType>Library</OutputType>
         <AppDesignerFolder>Properties</AppDesignerFolder>
@@ -13,7 +20,7 @@
         <AssemblyName>Talky</AssemblyName>
         <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
         <FileAlignment>512</FileAlignment>
-        <LangVersion>latest</LangVersion>
+        <LangVersion>12.0</LangVersion>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
         <PlatformTarget>x64</PlatformTarget>
@@ -25,7 +32,7 @@
         <DefineConstants>DEBUG;TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
         <PlatformTarget>x64</PlatformTarget>
@@ -36,7 +43,7 @@
         <DefineConstants>TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'EXILED|x64' ">
         <PlatformTarget>x64</PlatformTarget>
@@ -47,75 +54,95 @@
         <DefineConstants>EXILED;TRACE</DefineConstants>
         <ErrorReport>prompt</ErrorReport>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     </PropertyGroup>
     <ItemGroup>
         <Reference Include="0Harmony">
-          <HintPath>C:\Users\tayjm\AppData\Roaming\EXILED\Plugins\dependencies\0Harmony.dll</HintPath>
+          <HintPath>$(ExiledDependenciesDir)\0Harmony.dll</HintPath>
+          <Private>false</Private>
         </Reference>
         <Reference Include="Assembly-CSharp, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Assembly-CSharp-Publicized.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Assembly-CSharp-firstpass">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
+          <HintPath>$(ScpSlManagedDir)\Assembly-CSharp-firstpass.dll</HintPath>
+          <Private>false</Private>
         </Reference>
         <Reference Include="CommandSystem.Core, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\CommandSystem.Core.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Exiled.API, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.API.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Exiled.CreditTags, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.CreditTags.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Exiled.CustomItems, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.CustomItems.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Exiled.CustomRoles, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.CustomRoles.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Exiled.Events, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.Events.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Exiled.Loader, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.Loader.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Exiled.Permissions, Version=9.14.2.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\Exiled.Permissions.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="LabApi, Version=1.1.7.0, Culture=neutral, processorArchitecture=Amd64">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\LabApi.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Mirror">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Mirror.dll</HintPath>
+          <HintPath>$(ScpSlManagedDir)\Mirror.dll</HintPath>
+          <Private>false</Private>
         </Reference>
         <Reference Include="NorthwoodLib, Version=1.4.0.0, Culture=neutral, processorArchitecture=MSIL">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\NorthwoodLib.dll</HintPath>
+            <Private>false</Private>
         </Reference>
         <Reference Include="Pooling">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\Pooling.dll</HintPath>
+          <HintPath>$(ScpSlManagedDir)\Pooling.dll</HintPath>
+          <Private>false</Private>
         </Reference>
         <Reference Include="System"/>
         <Reference Include="System.Core"/>
         <Reference Include="System.Data"/>
         <Reference Include="System.Xml"/>
         <Reference Include="UnityEngine">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.dll</HintPath>
+          <HintPath>$(ScpSlManagedDir)\UnityEngine.dll</HintPath>
+          <Private>false</Private>
         </Reference>
         <Reference Include="UnityEngine.AnimationModule">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.AnimationModule.dll</HintPath>
+          <HintPath>$(ScpSlManagedDir)\UnityEngine.AnimationModule.dll</HintPath>
+          <Private>false</Private>
         </Reference>
         <Reference Include="UnityEngine.CoreModule">
-          <HintPath>C:\Users\tayjm\Desktop\scpsl\SCPSL_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+          <HintPath>$(ScpSlManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+          <Private>false</Private>
         </Reference>
         <Reference Include="YamlDotNet, Version=11.0.0.0, Culture=neutral, PublicKeyToken=ec19458f3c15af5e, processorArchitecture=MSIL">
           <HintPath>..\packages\ExMod.Exiled.9.14.2\lib\net48\YamlDotNet.dll</HintPath>
+          <Private>false</Private>
         </Reference>
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Behaviours\LookOverride.cs" />
         <Compile Include="Behaviours\SpeechTracker.cs" />
         <Compile Include="Bridges\CedModBridge.cs" />
+        <Compile Include="Bridges\CedModBinaryVerifier.cs" />
         <Compile Include="Bridges\ExiledBridge.cs" />
         <Compile Include="Bridges\ExiledRegistration.cs" />
         <Compile Include="Bridges\HarmonyBridge.cs" />
@@ -144,7 +171,7 @@
            from its embedded resource at runtime, so this assembly never names an EXILED type. -->
       <ProjectReference Include="..\Talky.Exiled\Talky.Exiled.csproj">
         <Project>{A1B2C3D4-0002-4000-8000-000000000002}</Project>
-        <Name>Talky.Exiled</Name>
+        <Name>Talky.Exiled.Shim</Name>
         <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
         <Private>false</Private>
       </ProjectReference>
@@ -153,25 +180,16 @@
       <!-- Embedded single-file payload. Talky.Core.dll keeps its ".dll" resource name so LabAPI and
            EXILED auto-extract and load it as a dependency before they scan types; the shim uses a
            ".bin" name so the auto-extractors ignore it and only ExiledRegistration loads it. -->
-      <EmbeddedResource Include="..\Talky.Core\bin\Talky.Core.dll">
+      <EmbeddedResource Include="..\Talky.Core\bin\$(Configuration)\Talky.Core.dll">
         <LogicalName>Talky.Core.dll</LogicalName>
         <Visible>false</Visible>
       </EmbeddedResource>
-      <EmbeddedResource Include="..\Talky.Exiled\bin\Talky.Exiled.dll">
-        <LogicalName>Talky.Exiled.dll.bin</LogicalName>
+      <EmbeddedResource Include="..\Talky.Exiled\bin\$(Configuration)\Talky.Exiled.Shim.dll">
+        <LogicalName>Talky.Exiled.Shim.dll.bin</LogicalName>
         <Visible>false</Visible>
       </EmbeddedResource>
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
-    <PropertyGroup>
-      <PostBuildEvent Condition=" '$(DeployPlugin)' == 'true' ">xcopy /Y $(TargetPath) "%APPDATA%\SCP Secret Laboratory\LabAPI\plugins\global"</PostBuildEvent>
-    </PropertyGroup>
-    <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
-         Other similar extension points exist, see Microsoft.Common.targets.
-    <Target Name="BeforeBuild">
-    </Target>
-    <Target Name="AfterBuild">
-    </Target>
-    -->
+    <Import Project="..\build\Talky.Build.targets"/>
 
 </Project>
