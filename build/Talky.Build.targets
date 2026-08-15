@@ -8,6 +8,13 @@
     <CscToolExe Condition=" '$(CscToolExe)' == '' ">csc.exe</CscToolExe>
     <TalkyCscExecutable Condition=" '$(CscToolPath)' != '' ">$(CscToolPath)\$(CscToolExe)</TalkyCscExecutable>
     <TalkyCscExecutable Condition=" '$(TalkyCscExecutable)' == '' ">$(MSBuildToolsPath)\Roslyn\$(CscToolExe)</TalkyCscExecutable>
+
+    <!-- The EXILED configuration deploys to EXILED's own plugin directory rather than the LabAPI
+         one named by DeployDirectory. Prefer an explicit ExiledDeployDirectory, then the
+         EXILED_PLUGINS_DIR environment variable, and otherwise derive it from the already-required
+         dependencies directory, which lives directly beneath it. -->
+    <ExiledDeployDirectory Condition=" '$(ExiledDeployDirectory)' == '' ">$(EXILED_PLUGINS_DIR)</ExiledDeployDirectory>
+    <ExiledDeployDirectory Condition=" '$(ExiledDeployDirectory)' == '' and '$(ExiledDependenciesDir)' != '' ">$([System.IO.Path]::GetFullPath('$(ExiledDependenciesDir)\..'))</ExiledDeployDirectory>
   </PropertyGroup>
 
   <Target Name="TalkyVerifyPinnedReferences"
@@ -56,11 +63,9 @@
     </ItemGroup>
   </Target>
 
-  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+  <!-- Release and EXILED both ship as Talky.dll; they differ by destination, not by file name. -->
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' or '$(Configuration)' == 'EXILED' ">
     <TalkyExpectedArtifactName>Talky.dll</TalkyExpectedArtifactName>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)' == 'EXILED' ">
-    <TalkyExpectedArtifactName>Talky.EXILED.dll</TalkyExpectedArtifactName>
   </PropertyGroup>
 
   <!-- Rider's normal Build action only executes the Build target. Keep the explicit,
@@ -69,19 +74,28 @@
   <Target Name="DeployBuiltPlugin"
           AfterTargets="Build"
           Condition=" '$(TalkyEnableDeployTarget)' == 'true' and '$(DeployPlugin)' == 'true' ">
-    <Error Condition=" '$(DeployDirectory)' == '' "
+    <!-- Computed here, not in a PropertyGroup: DeployDirectory typically arrives as an MSBuild
+         global property (/p: or the IDE's custom global properties), which a project-level
+         redefinition cannot override. -->
+    <PropertyGroup>
+      <_TalkyDeployDestination>$(DeployDirectory)</_TalkyDeployDestination>
+      <_TalkyDeployDestination Condition=" '$(Configuration)' == 'EXILED' ">$(ExiledDeployDirectory)</_TalkyDeployDestination>
+    </PropertyGroup>
+    <Error Condition=" '$(_TalkyDeployDestination)' == '' and '$(Configuration)' == 'EXILED' "
+           Text="DeployPlugin is enabled for the EXILED configuration, but neither ExiledDeployDirectory, EXILED_PLUGINS_DIR, nor ExiledDependenciesDir is set." />
+    <Error Condition=" '$(_TalkyDeployDestination)' == '' "
            Text="DeployPlugin is enabled, but DeployDirectory does not name the destination plugin directory." />
-    <Error Condition=" !$([System.IO.Path]::IsPathRooted('$(DeployDirectory)')) "
-           Text="DeployDirectory must be an absolute path." />
-    <Error Condition=" !Exists('$(DeployDirectory)') "
-           Text="DeployDirectory must already exist; it will not be created implicitly." />
+    <Error Condition=" !$([System.IO.Path]::IsPathRooted('$(_TalkyDeployDestination)')) "
+           Text="The deployment directory must be an absolute path, but was '$(_TalkyDeployDestination)'." />
+    <Error Condition=" !Exists('$(_TalkyDeployDestination)') "
+           Text="The deployment directory must already exist; it will not be created implicitly: $(_TalkyDeployDestination)" />
     <Error Condition=" !Exists('$(TargetPath)') "
            Text="The built Talky plugin does not exist at $(TargetPath)." />
     <Copy SourceFiles="$(TargetPath)"
-          DestinationFolder="$(DeployDirectory)"
+          DestinationFolder="$(_TalkyDeployDestination)"
           SkipUnchangedFiles="false" />
     <Message Importance="High"
-             Text="Deployed $(TargetFileName) to $(DeployDirectory)." />
+             Text="Deployed $(TargetFileName) to $(_TalkyDeployDestination)." />
   </Target>
 
   <Target Name="DeployValidatedPlugin" Condition=" '$(TalkyEnableDeployTarget)' == 'true' ">

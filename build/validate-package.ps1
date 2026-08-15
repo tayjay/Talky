@@ -53,8 +53,8 @@ if (-not (Test-Path -LiteralPath $packageDirectoryFull -PathType Container)) {
     throw "Package directory does not exist: '$packageDirectoryFull'."
 }
 
-$expectedArtifactName = if ($Configuration -eq 'Release') { 'Talky.dll' } else { 'Talky.EXILED.dll' }
-$expectedAssemblyName = if ($Configuration -eq 'Release') { 'Talky' } else { 'Talky.EXILED' }
+$expectedArtifactName = 'Talky.dll'
+$expectedAssemblyName = 'Talky'
 $provenancePath = Join-Path $packageDirectoryFull 'provenance.json'
 $sbomPath = Join-Path $packageDirectoryFull 'bom.cdx.json'
 if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf) -or -not (Test-Path -LiteralPath $sbomPath -PathType Leaf)) {

@@ -153,8 +153,8 @@ if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-f]{40}$') {
 $branch = ([string] (& git -C $repositoryRootFull rev-parse --abbrev-ref HEAD)).Trim()
 $commitTime = ([string] (& git -C $repositoryRootFull show -s --format=%cI $commit)).Trim()
 
-$artifactName = if ($Configuration -eq 'Release') { 'Talky.dll' } else { 'Talky.EXILED.dll' }
-$expectedAssemblyName = if ($Configuration -eq 'Release') { 'Talky' } else { 'Talky.EXILED' }
+$artifactName = 'Talky.dll'
+$expectedAssemblyName = 'Talky'
 $artifactPath = Join-Path $repositoryRootFull "Talky\bin\$Configuration\$artifactName"
 $pdbName = [System.IO.Path]::ChangeExtension($artifactName, '.pdb')
 $pdbPath = Join-Path ([System.IO.Path]::GetDirectoryName($artifactPath)) $pdbName

@@ -70,8 +70,8 @@ function Get-Sha256 {
 }
 
 $repositoryRootFull = [System.IO.Path]::GetFullPath($RepositoryRoot)
-$artifactName = if ($Configuration -eq 'Release') { 'Talky.dll' } else { 'Talky.EXILED.dll' }
-$expectedAssemblyName = if ($Configuration -eq 'Release') { 'Talky' } else { 'Talky.EXILED' }
+$artifactName = 'Talky.dll'
+$expectedAssemblyName = 'Talky'
 $artifactPath = [System.IO.Path]::GetFullPath(
     (Join-Path $repositoryRootFull "Talky\bin\$Configuration\$artifactName"))
 $corePath = [System.IO.Path]::GetFullPath(

@@ -23,8 +23,6 @@ public static class ExiledRegistration
     // servers; we load it ourselves, here, only when EXILED is present.
     private const string ShimResource = "Talky.Exiled.Shim.dll.bin";
 
-    private static Type _pluginType;
-
     /// <summary>Call from the LabAPI Plugin's constructor. No-ops unless loaded under EXILED.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void TryRegisterNativePlugin()
@@ -47,35 +45,39 @@ public static class ExiledRegistration
         if (PluginLoader.EnabledPlugins.Any(p => p.Name == TalkyBridge.Name)) return;
         if (LoaderPlugin.Instance == null) return;
 
-        if (_pluginType == null)
-            _pluginType = LoadShimPluginType();
-        if (_pluginType == null) return;
-
-        // Re-add if absent (covers EXILED 'reload', which clears Loader.Plugins).
-        // foreach, NOT .Any(lambda): a lambda would bake IPlugin<> into a closure field.
-        foreach (var existing in Loader.Plugins)
-            if (existing.Name == TalkyBridge.Name)
-                return;
-
-        var instance = (IPlugin<IConfig>)Activator.CreateInstance(_pluginType);
-        Loader.Plugins.Add(instance);
-        Log.Info($"Replacing Talky plugin with {_pluginType.FullName}.");
+        LoadShimPlugin();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static Type LoadShimPluginType()
+    private static void LoadShimPlugin()
     {
         Assembly self = typeof(ExiledRegistration).Assembly;
         using Stream stream = self.GetManifestResourceStream(ShimResource);
         if (stream == null)
         {
             Log.Error($"Talky: embedded shim resource '{ShimResource}' was not found.");
-            return null;
+            return;
         }
 
         using MemoryStream ms = new MemoryStream();
         stream.CopyTo(ms);
         Assembly shim = Assembly.Load(ms.ToArray());
-        return shim.GetType("Talky.Exiled.TalkyExiledPlugin", throwOnError: true);
+
+        // Let EXILED build the instance so it gets the same config/translation binding as a plugin
+        // loaded from disk. Returns null if the shim exposes no usable plugin type.
+        IPlugin<IConfig> plugin = Loader.CreatePlugin(shim);
+        if (plugin == null)
+        {
+            Log.Error("Talky: the embedded EXILED shim did not yield a plugin instance.");
+            return;
+        }
+
+        // Re-add if absent (covers EXILED 'reload', which clears Loader.Plugins).
+        if (!Loader.Plugins.Any<IPlugin<IConfig>>((Func<IPlugin<IConfig>, bool>)(p => p.Name == plugin.Name)))
+        {
+            Log.Info($"Loaded plugin {plugin.Name}@{plugin.Version}");
+            Server.PluginAssemblies.Add(shim, plugin);
+            Loader.Plugins.Add(plugin);
+        }
     }
 }
