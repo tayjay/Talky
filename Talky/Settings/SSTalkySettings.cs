@@ -125,7 +125,6 @@ public sealed class SSTalkySettings
         _active = false;
         _admissionByNetworkId.Clear();
         _pendingEmotionCount = 0;
-        Plugin.Instance?.Runtime?.ObservePendingActionDepth();
         Exception failure = null;
 
         if (_eventSubscribed)
@@ -189,14 +188,12 @@ public sealed class SSTalkySettings
             _pendingEmotionCount--;
         }
         _admissionByNetworkId.Remove(networkId);
-        Plugin.Instance?.Runtime?.ObservePendingActionDepth();
     }
 
     public void ResetPlayerState()
     {
         _admissionByNetworkId.Clear();
         _pendingEmotionCount = 0;
-        Plugin.Instance?.Runtime?.ObservePendingActionDepth();
     }
 
     /// <summary>
@@ -209,19 +206,14 @@ public sealed class SSTalkySettings
             Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
             return;
 
-        bool depthChanged = false;
         foreach (KeyValuePair<uint, PlayerSettingAdmission> pair in _admissionByNetworkId)
         {
             if (pair.Value.TryTakePendingEmotion(nowSeconds, out int selection))
             {
                 _pendingEmotionCount--;
-                depthChanged = true;
                 ApplyEmotion(pair.Key, (EmotionPresetType)selection);
             }
         }
-
-        if (depthChanged)
-            Plugin.Instance?.Runtime?.ObservePendingActionDepth();
     }
 
     public EmotionPresetType GetEmotionPreset(ReferenceHub hub)
@@ -328,7 +320,6 @@ public sealed class SSTalkySettings
             if (hadPending != hasPending)
             {
                 _pendingEmotionCount += hasPending ? 1 : -1;
-                Plugin.Instance?.Runtime?.ObservePendingActionDepth();
                 if (hadPending)
                     monitor?.Count(PerformanceCounter.PendingActionsCoalesced);
             }

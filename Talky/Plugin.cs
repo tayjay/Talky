@@ -415,7 +415,6 @@ public class Plugin : Plugin<Config>
         PerformanceMonitor?.Reconfigure(Config);
         Runtime?.ResetFailureQuarantine();
         ApplyCurrentPerformancePolicy();
-        Runtime?.RefreshDiagnosticsGauges();
     }
 
     internal void ApplyCurrentPerformancePolicy()

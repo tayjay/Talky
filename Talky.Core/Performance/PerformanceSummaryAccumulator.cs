@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 
 namespace Talky.Performance;
@@ -134,21 +134,7 @@ public sealed class PerformanceSummaryAccumulator
 
         for (int index = 0; index < (int)PerformanceCounter.Count; index++)
         {
-            PerformanceCounter counter = (PerformanceCounter)index;
-            long value = window.GetCounter(counter);
-            switch (PerformanceCounterCatalog.Aggregation(counter))
-            {
-                case PerformanceCounterAggregation.Last:
-                    _counters[index] = value;
-                    break;
-                case PerformanceCounterAggregation.Maximum:
-                    if (value > _counters[index])
-                        _counters[index] = value;
-                    break;
-                default:
-                    _counters[index] += value;
-                    break;
-            }
+            _counters[index] += window.GetCounter((PerformanceCounter)index);
         }
     }
 

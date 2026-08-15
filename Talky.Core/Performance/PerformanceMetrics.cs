@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 
 namespace Talky.Performance;
@@ -102,47 +102,6 @@ public enum PerformanceCounter
     SpeechTrackersCurrent = 62,
     LookTrackersCurrent = 63,
     Count = 64,
-}
-
-/// <summary>
-/// Defines how a counter is combined across completed windows. Most values are event totals;
-/// point-in-time queue depth and high-water observations deliberately use different semantics.
-/// </summary>
-public enum PerformanceCounterAggregation
-{
-    Sum = 0,
-    Last = 1,
-    Maximum = 2,
-}
-
-public static class PerformanceCounterCatalog
-{
-    public static PerformanceCounterAggregation Aggregation(PerformanceCounter counter)
-    {
-        switch (counter)
-        {
-            case PerformanceCounter.PendingActionsCurrent:
-            case PerformanceCounter.OwnedSubscriptionGroupsCurrent:
-            case PerformanceCounter.SimultaneousSpeakersCurrent:
-            case PerformanceCounter.SpeechTrackersCurrent:
-            case PerformanceCounter.LookTrackersCurrent:
-                return PerformanceCounterAggregation.Last;
-            case PerformanceCounter.SimultaneousSpeakersHighWater:
-                return PerformanceCounterAggregation.Maximum;
-            case PerformanceCounter.PendingActionsHighWater:
-                return PerformanceCounterAggregation.Maximum;
-            default:
-                Validate(counter);
-                return PerformanceCounterAggregation.Sum;
-        }
-    }
-
-    private static void Validate(PerformanceCounter counter)
-    {
-        int index = (int)counter;
-        if (index < 0 || index >= (int)PerformanceCounter.Count)
-            throw new ArgumentOutOfRangeException(nameof(counter));
-    }
 }
 
 /// <summary>

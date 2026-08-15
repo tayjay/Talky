@@ -120,35 +120,8 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
     public void Count(PerformanceCounter counter, long amount)
     {
-        if (_frozen || !_profilingEnabled)
-            return;
-
-        switch (PerformanceCounterCatalog.Aggregation(counter))
-        {
-            case PerformanceCounterAggregation.Last:
-                _profiler.SetGauge(counter, amount > 0L ? amount : 0L);
-                break;
-            case PerformanceCounterAggregation.Maximum:
-                if (amount > 0L)
-                    _profiler.ObserveHighWater(counter, amount);
-                break;
-            default:
-                if (amount != 0L)
-                    _profiler.Increment(counter, amount);
-                break;
-        }
-    }
-
-    public void SetGauge(PerformanceCounter counter, long value)
-    {
-        if (!_frozen && _profilingEnabled)
-            _profiler.SetGauge(counter, value > 0L ? value : 0L);
-    }
-
-    public void ObserveHighWater(PerformanceCounter counter, long value)
-    {
-        if (!_frozen && _profilingEnabled && value > 0L)
-            _profiler.ObserveHighWater(counter, value);
+        if (!_frozen && _profilingEnabled && amount != 0L)
+            _profiler.Increment(counter, amount);
     }
 
     /// <summary>
