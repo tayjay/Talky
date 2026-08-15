@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "runtimeVersion": "SCP:SL 14.2.7",
+  "advisoryPolicy": {
+    "maxReportAgeHours": 24
+  },
+  "toolchain": {
+    "msbuild": {
+      "fileName": "MSBuild.exe",
+      "fileVersion": "18.8.2.30814",
+      "productVersion": "18.8.2+ce25c01082c9c46cd02ad1ff3ff8f16fe5cc2f44",
+      "sha256": "F9D19CE98399AAE64D2207AA951E147D9179570A2280152EF6BAC36BB6ECB1E2",
+      "size": 378712
+    },
+    "msbuildTopLevel": {
+      "fileCount": 68,
+      "treeSha256": "B734D43946F1F75BDDF178B9690625512A83230F6714F09D615AEFECDFC331F5",
+      "hashFormat": "ordinal filename, tab, decimal size, tab, uppercase SHA-256; LF joined"
+    },
+    "csharpCompiler": {
+      "fileName": "csc.exe",
+      "fileVersion": "5.800.26.31902",
+      "productVersion": "5.8.0-1.26319.2+375c93f06396eff88a355bc473d1586bf71befb5",
+      "sha256": "C9CF9F8745929CF1222384D28A89F95AF827560BBCDDF335C25E0808D831F50E",
+      "size": 64792
+    },
+    "roslynTopLevel": {
+      "fileCount": 33,
+      "treeSha256": "744B2F71CE7665C8721AD446DDB7D5F32299B0DCF4D4124266FEC05C2EC86F90",
+      "hashFormat": "ordinal filename, tab, decimal size, tab, uppercase SHA-256; LF joined"
+    }
+  },
+  "packages": [
+    {
+      "id": "ExMod.Exiled",
+      "version": "9.14.2",
+      "packageUrl": "pkg:nuget/ExMod.Exiled@9.14.2",
+      "path": "packages/ExMod.Exiled.9.14.2",
+      "nupkg": "packages/ExMod.Exiled.9.14.2/ExMod.Exiled.9.14.2.nupkg",
+      "sha256": "35066F336C1273FAB33C7F4F5DAB4FDE73E6F82507A2DAF5632311BAECCD149B",
+      "signaturePolicy": "repository-signed"
+    }
+  ],
+  "references": [
+    {
+      "id": "0Harmony",
+      "source": "exiledDependencies",
+      "path": "0Harmony.dll",
+      "assemblyName": "0Harmony",
+      "assemblyVersion": "2.2.2.0",
+      "packageUrl": "pkg:nuget/Lib.Harmony@2.2.2",
+      "originEvidence": {
+        "type": "official-nuget-package-asset",
+        "packageUrl": "pkg:nuget/Lib.Harmony@2.2.2",
+        "downloadUrl": "https://api.nuget.org/v3-flatcontainer/lib.harmony/2.2.2/lib.harmony.2.2.2.nupkg",
+        "nupkgSha256": "2A4767D1C11A2222B2E4141C9F3AB35A86A6F749FFE989BA512CB8B7B74BE8B1",
+        "signaturePolicy": "repository-signed",
+        "assetPath": "lib/net48/0Harmony.dll",
+        "assetSha256": "0DE0118C8F1D4408DE389CA33B46D2FF7778F3A8541B430CAE729EC913D899C7",
+        "assetSize": 931840
+      },
+      "mvid": "0020ee40-255b-4dc7-a0eb-8b2a76225b38",
+      "sha256": "0DE0118C8F1D4408DE389CA33B46D2FF7778F3A8541B430CAE729EC913D899C7",
+      "size": 931840
+    },
+    {
+      "id": "Assembly-CSharp-firstpass",
+      "source": "scpslManaged",
+      "path": "Assembly-CSharp-firstpass.dll",
+      "assemblyName": "Assembly-CSharp-firstpass",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "ea2db1de-bcd8-4e3c-aab9-97fa5406df5a",
+      "sha256": "67BF73E81A8C0B69D615B51C0E3F6C3B52791EA53CEADC3AE7A0A2FE6118FAF8",
+      "size": 187392
+    },
+    {
+      "id": "Mirror",
+      "source": "scpslManaged",
+      "path": "Mirror.dll",
+      "assemblyName": "Mirror",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "d1a7efcd-ad45-40ce-9f00-18b9b7f2ea2e",
+      "sha256": "1DDCAEF387301EB3A4A7FFF82948035C5A114699BB0886BF5A0454D7193B33CB",
+      "size": 191488
+    },
+    {
+      "id": "Pooling",
+      "source": "scpslManaged",
+      "path": "Pooling.dll",
+      "assemblyName": "Pooling",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "ffc6150f-2c49-409d-84cb-63ebc535103f",
+      "sha256": "018AC2B5A25CA2B0DB71902A2AA115FD8993BE66709118DB92A80A168CCF5C03",
+      "size": 10752
+    },
+    {
+      "id": "UnityEngine",
+      "source": "scpslManaged",
+      "path": "UnityEngine.dll",
+      "assemblyName": "UnityEngine",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "7cd5ec30-d626-40cf-b7e3-4d718a3e3ea1",
+      "sha256": "2B50ADD050FD9287ED6CEA220E4D4068F865A9FCA04FC6C4BDBD54F97EC09304",
+      "size": 168632
+    },
+    {
+      "id": "UnityEngine.AnimationModule",
+      "source": "scpslManaged",
+      "path": "UnityEngine.AnimationModule.dll",
+      "assemblyName": "UnityEngine.AnimationModule",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "b6f9a9bb-f77b-4996-ae75-7d34fbc32263",
+      "sha256": "82890B6187D241C100CDC7D4688C3DEF78C6EB8DFB79278EAA01918D61102CE5",
+      "size": 211640
+    },
+    {
+      "id": "UnityEngine.CoreModule",
+      "source": "scpslManaged",
+      "path": "UnityEngine.CoreModule.dll",
+      "assemblyName": "UnityEngine.CoreModule",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "6869b160-8d10-4370-ab44-84f8f699b3fc",
+      "sha256": "4DAEFE9737C4BC32350957490BB47EB13DDDF3B47B7FAE8DFD0FDED9DDF24832",
+      "size": 1793208
+    },
+    {
+      "id": "Assembly-CSharp-Publicized",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Assembly-CSharp-Publicized.dll",
+      "assemblyName": "Assembly-CSharp",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "10377bb2-bb74-4319-8012-e8bb2801498d",
+      "sha256": "11BE34E30FCBD241B8294FB9CD6AFDE57440C7FD4A89BDA7091804D6161316EF",
+      "size": 4300800
+    },
+    {
+      "id": "CommandSystem.Core",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/CommandSystem.Core.dll",
+      "assemblyName": "CommandSystem.Core",
+      "assemblyVersion": "0.0.0.0",
+      "mvid": "85a2fdf0-4a78-44e0-a287-90d420f8eb40",
+      "sha256": "A208474656119CEC431F977516A4B7D64D861347FE0265D731118121B785278E",
+      "size": 8704
+    },
+    {
+      "id": "Exiled.API",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Exiled.API.dll",
+      "assemblyName": "Exiled.API",
+      "assemblyVersion": "9.14.2.0",
+      "mvid": "97114aa4-89af-47c3-98ca-f508592c9732",
+      "sha256": "4388CF39C39F8C5881EFAB1A39E0B655F8529289615A8F8C26B2B2B162B84A8A",
+      "size": 638464
+    },
+    {
+      "id": "Exiled.CreditTags",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Exiled.CreditTags.dll",
+      "assemblyName": "Exiled.CreditTags",
+      "assemblyVersion": "9.14.2.0",
+      "mvid": "a1465e43-1204-4d84-8bac-93dfc205f7e0",
+      "sha256": "1C6DDCDE899E9B271D9A37954815A417ACE8717FD4FD30EBF67C064EAAB9967F",
+      "size": 18944
+    },
+    {
+      "id": "Exiled.CustomItems",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Exiled.CustomItems.dll",
+      "assemblyName": "Exiled.CustomItems",
+      "assemblyVersion": "9.14.2.0",
+      "mvid": "961f52bf-ea68-4e21-95ac-d8711da956a9",
+      "sha256": "76B4580E1CE459A845A1933D41577A3FB5E2D098FB444937C6B77E73F8BCE48C",
+      "size": 71168
+    },
+    {
+      "id": "Exiled.CustomRoles",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Exiled.CustomRoles.dll",
+      "assemblyName": "Exiled.CustomRoles",
+      "assemblyVersion": "9.14.2.0",
+      "mvid": "23a8b2a6-e9b6-4858-87de-abcb6c161cbb",
+      "sha256": "B20153985947DAF4F831790A4EDBFF362B806F0E8C9DFAEF2E12CADDA855D81C",
+      "size": 63488
+    },
+    {
+      "id": "Exiled.Events",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Exiled.Events.dll",
+      "assemblyName": "Exiled.Events",
+      "assemblyVersion": "9.14.2.0",
+      "mvid": "6e6460b0-26aa-462c-8694-a764a5da34cd",
+      "sha256": "7EBB1FDD81C6CFFF5E3128084C8EB6BC9B7DE44F09DC8303C765E4090CE8F53A",
+      "size": 1025536
+    },
+    {
+      "id": "Exiled.Loader",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Exiled.Loader.dll",
+      "assemblyName": "Exiled.Loader",
+      "assemblyVersion": "9.14.2.0",
+      "mvid": "878f30a6-11e3-4b8e-96fe-bcd6b7926baf",
+      "sha256": "C59C9648393666A33BD330D3B5882E1B775E956C11A6BD1C7C186DC6BA05D86E",
+      "size": 77824
+    },
+    {
+      "id": "Exiled.Permissions",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/Exiled.Permissions.dll",
+      "assemblyName": "Exiled.Permissions",
+      "assemblyVersion": "9.14.2.0",
+      "mvid": "ce63b4ad-7118-46a5-a28f-b3a438f86095",
+      "sha256": "2F89A0DD47018948A4EB112836F8F23B432EB49F371931FE43C97AAD7E3CC3FF",
+      "size": 24064
+    },
+    {
+      "id": "LabApi",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/LabApi.dll",
+      "assemblyName": "LabApi",
+      "assemblyVersion": "1.1.7.0",
+      "packageUrl": "pkg:nuget/Northwood.LabAPI@1.1.7",
+      "originEvidence": {
+        "type": "official-nuget-package-asset",
+        "packageUrl": "pkg:nuget/Northwood.LabAPI@1.1.7",
+        "downloadUrl": "https://api.nuget.org/v3-flatcontainer/northwood.labapi/1.1.7/northwood.labapi.1.1.7.nupkg",
+        "nupkgSha256": "6877CB8C4A91FA2F9695C3E9D8E9AC98B2B3F9A6C4346EBFD418895CCD7EB0D9",
+        "signaturePolicy": "repository-signed",
+        "assetPath": "lib/net48/LabApi.dll",
+        "assetSha256": "87E0ED61AC027BDF0CF4F03BB06C73E7F15A82763571F05BDC2F6960EADB5696",
+        "assetSize": 822784
+      },
+      "mvid": "3cd6265e-a130-458f-b1f2-e3e6e32f461b",
+      "sha256": "87E0ED61AC027BDF0CF4F03BB06C73E7F15A82763571F05BDC2F6960EADB5696",
+      "size": 822784
+    },
+    {
+      "id": "NorthwoodLib",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/NorthwoodLib.dll",
+      "assemblyName": "NorthwoodLib",
+      "assemblyVersion": "1.4.0.0",
+      "mvid": "d2d9c50e-d2da-4325-af54-3605b745181b",
+      "sha256": "0672CDAE67F0CCC1AF0B7CB60914C46FE4A067ED9B42A70DC5F4FD16E2DF7BCE",
+      "size": 48224
+    },
+    {
+      "id": "YamlDotNet",
+      "source": "repository",
+      "path": "packages/ExMod.Exiled.9.14.2/lib/net48/YamlDotNet.dll",
+      "assemblyName": "YamlDotNet",
+      "assemblyVersion": "11.0.0.0",
+      "mvid": "2af5e758-5df3-4fbc-8def-e986ebd40c09",
+      "sha256": "4096835E9924C81D9DB39C9ED985E11EF8FAEAB3971870308E81C269D963E8F3",
+      "size": 221696
+    }
+  ]
+}

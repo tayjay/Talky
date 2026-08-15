@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <TalkyRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</TalkyRepositoryRoot>
+    <TalkyReferenceManifest>$(TalkyRepositoryRoot)\build\reference-manifest.json</TalkyReferenceManifest>
+    <TalkyPowerShellExecutable Condition=" '$(TalkyPowerShellExecutable)' == '' ">pwsh</TalkyPowerShellExecutable>
+    <TalkyMsBuildExecutable>$(MSBuildToolsPath)\MSBuild.exe</TalkyMsBuildExecutable>
+    <CscToolExe Condition=" '$(CscToolExe)' == '' ">csc.exe</CscToolExe>
+    <TalkyCscExecutable Condition=" '$(CscToolPath)' != '' ">$(CscToolPath)\$(CscToolExe)</TalkyCscExecutable>
+    <TalkyCscExecutable Condition=" '$(TalkyCscExecutable)' == '' ">$(MSBuildToolsPath)\Roslyn\$(CscToolExe)</TalkyCscExecutable>
+  </PropertyGroup>
+
+  <Target Name="TalkyVerifyPinnedReferences"
+          BeforeTargets="ResolveAssemblyReferences"
+          Condition=" '$(TalkyVerifyReferences)' == 'true' ">
+    <Error Condition=" !Exists('$(TalkyReferenceManifest)') "
+           Text="Talky reference manifest is missing: $(TalkyReferenceManifest)" />
+    <Error Condition=" '$(TalkyRequireGameReferences)' == 'true' and '$(ScpSlManagedDir)' == '' "
+           Text="ScpSlManagedDir is required. Set /p:ScpSlManagedDir=... or SCPSL_MANAGED_DIR." />
+    <Error Condition=" '$(TalkyRequireGameReferences)' == 'true' and '$(ExiledDependenciesDir)' == '' "
+           Text="ExiledDependenciesDir is required. Set /p:ExiledDependenciesDir=... or EXILED_DEPENDENCIES_DIR." />
+    <Exec Command="&quot;$(TalkyPowerShellExecutable)&quot; -NoProfile -NonInteractive -File &quot;$(TalkyRepositoryRoot)\build\verify-references.ps1&quot; -ManifestPath &quot;$(TalkyReferenceManifest)&quot; -ProjectPath &quot;$(MSBuildProjectFullPath)&quot; -RepositoryRoot &quot;$(TalkyRepositoryRoot)&quot; -ScpSlManagedDir &quot;$(ScpSlManagedDir)&quot; -ExiledDependenciesDir &quot;$(ExiledDependenciesDir)&quot; -MSBuildPath &quot;$(TalkyMsBuildExecutable)&quot; -CscPath &quot;$(TalkyCscExecutable)&quot;" />
+  </Target>
+
+  <Target Name="TalkyRejectCopyLocalReferences"
+          AfterTargets="ResolveAssemblyReferences"
+          Condition=" '$(TalkyVerifyReferences)' == 'true' ">
+    <Error Condition=" '@(ReferenceCopyLocalPaths)' != '' "
+           Text="Framework/game references must not be copied into plugin output. Unexpected copy-local files: @(ReferenceCopyLocalPaths, ', ')." />
+  </Target>
+
+  <Target Name="TalkyGenerateInformationalVersion"
+          BeforeTargets="CoreCompile"
+          Condition=" '$(TalkyGenerateBuildInfo)' == 'true' ">
+    <Exec Command="git -C &quot;$(TalkyRepositoryRoot)&quot; rev-parse --verify HEAD"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_TalkyGitCommitOutput" />
+    </Exec>
+    <PropertyGroup>
+      <TalkyGitCommit>@(_TalkyGitCommitOutput)</TalkyGitCommit>
+      <TalkyInformationalVersion>$(TalkyVersionPrefix)+git.$(TalkyGitCommit)</TalkyInformationalVersion>
+      <TalkyBuildInfoFile>$(IntermediateOutputPath)Talky.BuildInfo.g.cs</TalkyBuildInfoFile>
+    </PropertyGroup>
+    <Error Condition=" '$(TalkyGitCommit)' == '' " Text="Cannot determine the Git commit for AssemblyInformationalVersion." />
+    <ItemGroup>
+      <_TalkyBuildAttribute Include="System.Reflection.AssemblyInformationalVersionAttribute">
+        <_Parameter1>$(TalkyInformationalVersion)</_Parameter1>
+      </_TalkyBuildAttribute>
+    </ItemGroup>
+    <WriteCodeFragment Language="C#"
+                       OutputFile="$(TalkyBuildInfoFile)"
+                       AssemblyAttributes="@(_TalkyBuildAttribute)" />
+    <ItemGroup>
+      <Compile Include="$(TalkyBuildInfoFile)" />
+    </ItemGroup>
+  </Target>
+
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <TalkyExpectedArtifactName>Talky.dll</TalkyExpectedArtifactName>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'EXILED' ">
+    <TalkyExpectedArtifactName>Talky.EXILED.dll</TalkyExpectedArtifactName>
+  </PropertyGroup>
+
+  <!-- Rider's normal Build action only executes the Build target. Keep the explicit,
+       package-validated release target below, but restore opt-in developer deployment
+       as part of the ordinary build graph when DeployPlugin=true. -->
+  <Target Name="DeployBuiltPlugin"
+          AfterTargets="Build"
+          Condition=" '$(TalkyEnableDeployTarget)' == 'true' and '$(DeployPlugin)' == 'true' ">
+    <Error Condition=" '$(DeployDirectory)' == '' "
+           Text="DeployPlugin is enabled, but DeployDirectory does not name the destination plugin directory." />
+    <Error Condition=" !$([System.IO.Path]::IsPathRooted('$(DeployDirectory)')) "
+           Text="DeployDirectory must be an absolute path." />
+    <Error Condition=" !Exists('$(DeployDirectory)') "
+           Text="DeployDirectory must already exist; it will not be created implicitly." />
+    <Error Condition=" !Exists('$(TargetPath)') "
+           Text="The built Talky plugin does not exist at $(TargetPath)." />
+    <Copy SourceFiles="$(TargetPath)"
+          DestinationFolder="$(DeployDirectory)"
+          SkipUnchangedFiles="false" />
+    <Message Importance="High"
+             Text="Deployed $(TargetFileName) to $(DeployDirectory)." />
+  </Target>
+
+  <Target Name="DeployValidatedPlugin" Condition=" '$(TalkyEnableDeployTarget)' == 'true' ">
+    <Error Condition=" '$(DeployPlugin)' != 'true' "
+           Text="Deployment is disabled. Re-run this explicit target with /p:DeployPlugin=true." />
+    <Error Condition=" '$(Configuration)' != 'Release' and '$(Configuration)' != 'EXILED' "
+           Text="DeployValidatedPlugin accepts only Release or EXILED packages." />
+    <Error Condition=" '$(ValidatedPackageDir)' == '' "
+           Text="ValidatedPackageDir must explicitly name a package staging directory." />
+    <Error Condition=" '$(DeployDirectory)' == '' "
+           Text="DeployDirectory must explicitly name the destination plugin directory." />
+    <Error Condition=" !$([System.IO.Path]::IsPathRooted('$(DeployDirectory)')) "
+           Text="DeployDirectory must be an absolute path." />
+    <Error Condition=" !Exists('$(DeployDirectory)') "
+           Text="DeployDirectory must already exist; it will not be created implicitly." />
+    <Error Condition=" '$(ScpSlManagedDir)' == '' "
+           Text="ScpSlManagedDir is required to re-verify the pinned runtime before deployment." />
+    <Error Condition=" '$(ExiledDependenciesDir)' == '' "
+           Text="ExiledDependenciesDir is required to re-verify the pinned runtime before deployment." />
+    <Exec Command="&quot;$(TalkyPowerShellExecutable)&quot; -NoProfile -NonInteractive -File &quot;$(TalkyRepositoryRoot)\build\verify-references.ps1&quot; -ManifestPath &quot;$(TalkyReferenceManifest)&quot; -RepositoryRoot &quot;$(TalkyRepositoryRoot)&quot; -ScpSlManagedDir &quot;$(ScpSlManagedDir)&quot; -ExiledDependenciesDir &quot;$(ExiledDependenciesDir)&quot; -MSBuildPath &quot;$(TalkyMsBuildExecutable)&quot; -CscPath &quot;$(TalkyCscExecutable)&quot; -VerifyPackageSignature -VerifyPackageOrigins" />
+    <Exec Command="&quot;$(TalkyPowerShellExecutable)&quot; -NoProfile -NonInteractive -File &quot;$(TalkyRepositoryRoot)\build\validate-package.ps1&quot; -PackageDirectory &quot;$(ValidatedPackageDir)&quot; -Configuration &quot;$(Configuration)&quot; -RepositoryRoot &quot;$(TalkyRepositoryRoot)&quot;" />
+    <ItemGroup>
+      <_TalkyValidatedDeployArtifact Include="$(ValidatedPackageDir)\$(TalkyExpectedArtifactName)" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_TalkyValidatedDeployArtifact)"
+          DestinationFolder="$(DeployDirectory)"
+          SkipUnchangedFiles="false" />
+  </Target>
+</Project>
