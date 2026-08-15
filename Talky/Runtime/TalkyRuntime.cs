@@ -489,7 +489,6 @@ public sealed class TalkyRuntime : IDisposable
             {
                 ProcessPendingConsumables(now);
                 ProcessPendingEmotions(now);
-                Plugin.Instance?.Settings?.ProcessPendingEmotionChanges(MonotonicSeconds());
             }
             finally
             {

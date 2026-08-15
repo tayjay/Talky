@@ -1,26 +1,32 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using LabApi.Features.Wrappers;
-using Mirror;
 using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers.OverlayAnims;
 using Talky.Behaviours;
 using Talky.Performance;
-using Talky.Security;
 using UnityEngine;
 using UserSettings.ServerSpecific;
+using Logger = LabApi.Features.Console.Logger;
 using PerformanceCounter = Talky.Performance.PerformanceCounter;
 
 namespace Talky.Settings;
 
 public sealed class SSTalkySettings
 {
-    private readonly Dictionary<uint, PlayerSettingAdmission> _admissionByNetworkId =
-        new Dictionary<uint, PlayerSettingAdmission>(128);
+    private const int MinEmotion = 0;
+    private const int MaxEmotion = 6;
+    private const float GrabCooldown = 1.111f;
+    private const float EmotionCooldown = 0.5f;
+
+    // Edge state and cooldowns for client-controlled settings. ServerOnSettingValueReceived is
+    // driven entirely by the client, so a modified one can send as fast as it likes.
+    private readonly HashSet<uint> _grabHeld = new HashSet<uint>();
+    private readonly Dictionary<uint, float> _nextGrabAt = new Dictionary<uint, float>(128);
+    private readonly Dictionary<uint, float> _nextEmotionAt = new Dictionary<uint, float>(128);
 
     private SSKeybindSetting _grabKeybind;
     private SSDropdownSetting _defaultEmotionDropdown;
@@ -28,23 +34,11 @@ public sealed class SSTalkySettings
     private ServerSpecificSettingBase[] _ownedSettings;
     private bool _active;
     private bool _eventSubscribed;
-    private bool _settingsPublished;
-    private bool _cleanupPending;
-    private int _pendingEmotionCount;
-
-    public bool HasCleanupResidue =>
-        _cleanupPending || _eventSubscribed || _settingsPublished || _ownedSettings != null;
-    public int PendingEmotionCount => _pendingEmotionCount;
 
     public void Activate()
     {
         if (_active)
             return;
-        if (HasCleanupResidue)
-        {
-            throw new InvalidOperationException(
-                "Talky server-specific settings still own state from an incomplete cleanup.");
-        }
 
         _active = true;
         try
@@ -89,43 +83,31 @@ public sealed class SSTalkySettings
                 _enableTalking,
             };
 
+            // Append rather than assign: DefinedSettings is shared with every other plugin.
             ServerSpecificSettingsSync.DefinedSettings =
                 ServerSpecificSettingsSync.DefinedSettings == null
                     ? _ownedSettings
                     : ServerSpecificSettingsSync.DefinedSettings.Concat(_ownedSettings).ToArray();
-            _settingsPublished = true;
             ServerSpecificSettingsSync.SendToAll();
 
+            // Set before subscribing so a throw from += cannot leave the flag lying.
             _eventSubscribed = true;
             ServerSpecificSettingsSync.ServerOnSettingValueReceived += ProcessUserInput;
         }
-        catch (Exception activationException)
+        catch
         {
-            try
-            {
-                Deactivate();
-            }
-            catch (Exception cleanupException)
-            {
-                throw new AggregateException(
-                    "Talky settings activation and rollback both failed.",
-                    activationException,
-                    cleanupException);
-            }
-
+            Deactivate();
             throw;
         }
     }
 
     public void Deactivate()
     {
-        if (!_active && !HasCleanupResidue)
+        if (!_active && !_eventSubscribed && _ownedSettings == null)
             return;
 
         _active = false;
-        _admissionByNetworkId.Clear();
-        _pendingEmotionCount = 0;
-        Exception failure = null;
+        ResetPlayerState();
 
         if (_eventSubscribed)
         {
@@ -136,15 +118,17 @@ public sealed class SSTalkySettings
             }
             catch (Exception exception)
             {
-                failure = exception;
+                Logger.Error("Talky failed to unsubscribe its settings handler: " + exception);
             }
         }
 
-        if (_settingsPublished)
+        // Nothing owned means nothing was ever appended, so there is no shared array to repair
+        // and no reason to rebroadcast the whole settings list to every client.
+        if (_ownedSettings != null)
         {
             try
             {
-                if (ServerSpecificSettingsSync.DefinedSettings != null && _ownedSettings != null)
+                if (ServerSpecificSettingsSync.DefinedSettings != null)
                 {
                     ServerSpecificSettingsSync.DefinedSettings =
                         ServerSpecificSettingsSync.DefinedSettings
@@ -153,25 +137,16 @@ public sealed class SSTalkySettings
                 }
 
                 ServerSpecificSettingsSync.SendToAll();
-                _settingsPublished = false;
             }
             catch (Exception exception)
             {
-                failure = failure == null
-                    ? exception
-                    : new AggregateException(failure, exception);
+                Logger.Error(
+                    "Talky failed to fully remove its server-specific settings: " + exception);
             }
         }
 
-        if (failure != null)
-        {
-            _cleanupPending = true;
-            throw new InvalidOperationException(
-                "Talky could not fully remove its server-specific settings.",
-                failure);
-        }
-
-        _cleanupPending = false;
+        // Released regardless of the outcome above. The !_active check is what makes a surviving
+        // subscription inert, so holding these references buys nothing.
         _ownedSettings = null;
         _grabKeybind = null;
         _defaultEmotionDropdown = null;
@@ -180,39 +155,16 @@ public sealed class SSTalkySettings
 
     public void ForgetPlayer(uint networkId)
     {
-        if (_admissionByNetworkId.TryGetValue(
-                networkId,
-                out PlayerSettingAdmission admission) &&
-            admission.HasPendingEmotion)
-        {
-            _pendingEmotionCount--;
-        }
-        _admissionByNetworkId.Remove(networkId);
+        _grabHeld.Remove(networkId);
+        _nextGrabAt.Remove(networkId);
+        _nextEmotionAt.Remove(networkId);
     }
 
     public void ResetPlayerState()
     {
-        _admissionByNetworkId.Clear();
-        _pendingEmotionCount = 0;
-    }
-
-    /// <summary>
-    /// Applies the latest coalesced emotion selection. Called from Talky's existing main-thread
-    /// scheduler; it does no work unless a player's half-second admission window has elapsed.
-    /// </summary>
-    public void ProcessPendingEmotionChanges(double nowSeconds)
-    {
-        if (!_active || _admissionByNetworkId.Count == 0)
-            return;
-
-        foreach (KeyValuePair<uint, PlayerSettingAdmission> pair in _admissionByNetworkId)
-        {
-            if (pair.Value.TryTakePendingEmotion(nowSeconds, out int selection))
-            {
-                _pendingEmotionCount--;
-                ApplyEmotion(pair.Key, (EmotionPresetType)selection);
-            }
-        }
+        _grabHeld.Clear();
+        _nextGrabAt.Clear();
+        _nextEmotionAt.Clear();
     }
 
     public EmotionPresetType GetEmotionPreset(ReferenceHub hub)
@@ -244,49 +196,40 @@ public sealed class SSTalkySettings
 
     private void ProcessUserInput(ReferenceHub hub, ServerSpecificSettingBase setting)
     {
-        if (!_active || hub == null || setting == null || !IsTalkySetting(setting))
+        // ServerOnSettingValueReceived is a global multicast: a throw here aborts dispatch for
+        // every plugin whose handler is registered after Talky's.
+        if (!_active || hub == null || setting == null)
             return;
 
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.Count(PerformanceCounter.SettingsResponses);
-        long started = monitor?.Begin(PerformanceMetric.SettingsResponse) ??
-                       PerformanceProfiler.NotSampled;
-        try
-        {
-            ProcessUserInputCore(hub, setting, monitor);
-        }
-        finally
-        {
-            monitor?.End(PerformanceMetric.SettingsResponse, started);
-        }
-    }
+        uint networkId = hub.netId;
+        float now = Time.time;
 
-    private void ProcessUserInputCore(
-        ReferenceHub hub,
-        ServerSpecificSettingBase setting,
-        TalkyPerformanceMonitor monitor)
-    {
-
-        double nowSeconds = MonotonicSeconds();
-
+        // The concrete-type test is not redundant with the id test: Deactivate rewrites the
+        // shared DefinedSettings array, so ids can collide across a Talky reload.
         if (_grabKeybind != null && setting.SettingId == _grabKeybind.SettingId &&
             setting is SSKeybindSetting keybind)
         {
-            PlayerSettingAdmission admission = GetAdmission(hub.netId);
-            GrabAdmission result = admission.ObserveGrab(keybind.SyncIsPressed, nowSeconds);
-            if (result == GrabAdmission.Throttled || result == GrabAdmission.InvalidTime)
-                monitor?.Count(PerformanceCounter.GrabThrottled);
-            else if (result == GrabAdmission.DuplicatePress)
-                monitor?.Count(PerformanceCounter.GrabDuplicate);
-
-            if (result != GrabAdmission.Accepted)
+            if (!keybind.SyncIsPressed)
             {
+                _grabHeld.Remove(networkId);
                 return;
             }
 
-            monitor?.Count(PerformanceCounter.GrabAccepted);
+            // Edge-triggered. Without this, a client repeating pressed=true turns each message
+            // into a server-wide OverlayAnimationsBase.SendRpc.
+            if (!_grabHeld.Add(networkId))
+                return;
+
+            if (_nextGrabAt.TryGetValue(networkId, out float grabReadyAt) && now < grabReadyAt)
+            {
+                monitor?.Count(PerformanceCounter.GrabThrottled);
+                return;
+            }
+
+            _nextGrabAt[networkId] = now + GrabCooldown;
             if (Plugin.Instance?.Config?.EnableGrabAnimation == true)
-                PlayGrabAnimation(hub, monitor);
+                PlayGrabAnimation(hub);
             return;
         }
 
@@ -294,51 +237,54 @@ public sealed class SSTalkySettings
             setting.SettingId == _defaultEmotionDropdown.SettingId &&
             setting is SSDropdownSetting dropdown)
         {
-            int rawSelection = dropdown.SyncSelectionIndexRaw;
-            int validatedSelection = dropdown.SyncSelectionIndexValidated;
-            if (!IsValidEmotion(rawSelection) || !IsValidEmotion(validatedSelection))
+            // Validated, not raw: the raw index is unclamped client input, and range-checking it
+            // would discard a selection the game itself would have clamped into range.
+            int selection = dropdown.SyncSelectionIndexValidated;
+            if (!IsValidEmotion(selection))
             {
                 monitor?.Count(PerformanceCounter.InvalidEmotionSelections);
                 return;
             }
 
-            PlayerSettingAdmission admission = GetAdmission(hub.netId);
-            bool hadPending = admission.HasPendingEmotion;
-            EmotionAdmission result =
-                admission.ObserveEmotion(validatedSelection, nowSeconds);
-            bool hasPending = admission.HasPendingEmotion;
-            if (hadPending != hasPending)
+            EmotionPresetType preset = (EmotionPresetType)selection;
+
+            // The tracker default is a local field read at the player's next spawn, so it costs
+            // nothing and is never rate limited. Only the replicated write below is.
+            if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
+                    networkId,
+                    out SpeechTracker tracker) == true)
             {
-                _pendingEmotionCount += hasPending ? 1 : -1;
-                if (hadPending)
-                    monitor?.Count(PerformanceCounter.PendingActionsCoalesced);
+                tracker.defaultPreset = preset;
             }
-            if (result == EmotionAdmission.Applied)
-                ApplyEmotion(hub, (EmotionPresetType)validatedSelection);
-            else if (result == EmotionAdmission.Coalesced)
+
+            if (_nextEmotionAt.TryGetValue(networkId, out float emotionReadyAt) &&
+                now < emotionReadyAt)
             {
-                monitor?.Count(PerformanceCounter.EmotionCoalesced);
-                monitor?.Count(
-                    hadPending
-                        ? PerformanceCounter.PendingActionsCoalesced
-                        : PerformanceCounter.PendingActionsQueued);
+                return;
             }
+
+            _nextEmotionAt[networkId] = now + EmotionCooldown;
+            Player player = Player.Get(hub);
+
+            // Skip the replicated write when it would change nothing: a client resending an
+            // unchanged selection should cost zero network traffic, not one broadcast per window.
+            if (player != null && !player.IsDestroyed && player.Emotion != preset)
+                player.Emotion = preset;
+
             return;
         }
 
         if (_enableTalking != null && setting.SettingId == _enableTalking.SettingId &&
             setting is SSTwoButtonsSetting talkingSetting &&
             Plugin.Instance?.Runtime?.TryGetSpeechTracker(
-                hub.netId,
-                out SpeechTracker tracker) == true)
+                networkId,
+                out SpeechTracker talkingTracker) == true)
         {
-            tracker.ShouldAnimateFace = talkingSetting.SyncIsB;
+            talkingTracker.ShouldAnimateFace = talkingSetting.SyncIsB;
         }
     }
 
-    private static void PlayGrabAnimation(
-        ReferenceHub hub,
-        TalkyPerformanceMonitor monitor)
+    private static void PlayGrabAnimation(ReferenceHub hub)
     {
         Player player = Player.Get(hub);
         if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
@@ -353,6 +299,8 @@ public sealed class SSTalkySettings
         if (player == null || player.IsDestroyed || player.ReferenceHub == null)
             return;
 
+        // _overlayAnimations is a publicized private field on a Northwood type that is free to
+        // change shape, so index 1 is checked rather than assumed.
         if (!(player.ReferenceHub.roleManager.CurrentRole is IFpcRole currentRole) ||
             !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel model) ||
             !model.TryGetSubcontroller(out OverlayAnimationsSubcontroller subcontroller) ||
@@ -364,107 +312,16 @@ public sealed class SSTalkySettings
         }
 
         OverlayAnimationsBase animation = subcontroller._overlayAnimations[1];
-        long started = monitor?.Begin(PerformanceMetric.AnimationRpc) ??
-                       PerformanceProfiler.NotSampled;
-        try
-        {
-            long readyRecipients = CountReadyNetworkRecipients();
-            animation.OnStarted();
-            animation.SendRpc();
-            monitor?.Count(PerformanceCounter.AnimationRpcSends);
-            monitor?.Count(
-                PerformanceCounter.AnimationRpcLogicalRecipients,
-                readyRecipients);
-        }
-        finally
-        {
-            monitor?.End(PerformanceMetric.AnimationRpc, started);
-        }
+        animation.OnStarted();
+        animation.SendRpc();
 
         if (Plugin.Instance?.Runtime?.TryGetLookOverride(
                 player.ReferenceHub.netId,
                 out LookOverride lookOverride) == true)
         {
-            lookOverride.LastBusyTime =
-                Time.time + (float)PlayerSettingAdmission.GrabAnimationSeconds;
+            // Suppress glancing for exactly as long as the animation occupies the player.
+            lookOverride.LastBusyTime = Time.time + GrabCooldown;
         }
-    }
-
-    /// <summary>
-    /// Matches Mirror's SendToReady recipient predicate. This remains a logical recipient count:
-    /// SendRpc returning does not expose serialized bytes, packets, queues, delivery, or drops.
-    /// </summary>
-    private static long CountReadyNetworkRecipients()
-    {
-        long recipients = 0L;
-        foreach (NetworkConnectionToClient connection in NetworkServer.connections.Values)
-        {
-            if (connection != null && connection.isReady)
-                recipients++;
-        }
-
-        return recipients;
-    }
-
-    private static void ApplyEmotion(ReferenceHub hub, EmotionPresetType preset)
-    {
-        if (hub == null)
-            return;
-
-        Player player = Player.Get(hub);
-        if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
-                hub.netId,
-                out SpeechTracker tracker) == true)
-        {
-            tracker.defaultPreset = preset;
-        }
-
-        if (player != null && !player.IsDestroyed)
-        {
-            player.Emotion = preset;
-            Plugin.Instance?.PerformanceMonitor?.Count(PerformanceCounter.EmotionApplied);
-        }
-    }
-
-    private static void ApplyEmotion(uint networkId, EmotionPresetType preset)
-    {
-        if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
-                networkId,
-                out SpeechTracker tracker) != true ||
-            tracker?.Player == null ||
-            tracker.Player.IsDestroyed)
-        {
-            return;
-        }
-
-        tracker.defaultPreset = preset;
-        tracker.Player.Emotion = preset;
-        Plugin.Instance?.PerformanceMonitor?.Count(PerformanceCounter.EmotionApplied);
-    }
-
-    private PlayerSettingAdmission GetAdmission(uint networkId)
-    {
-        if (!_admissionByNetworkId.TryGetValue(networkId, out PlayerSettingAdmission admission))
-        {
-            admission = new PlayerSettingAdmission();
-            _admissionByNetworkId.Add(networkId, admission);
-        }
-
-        return admission;
-    }
-
-    private bool IsTalkySetting(ServerSpecificSettingBase setting)
-    {
-        int settingId = setting.SettingId;
-        return (_grabKeybind != null &&
-                settingId == _grabKeybind.SettingId &&
-                setting is SSKeybindSetting) ||
-               (_defaultEmotionDropdown != null &&
-                settingId == _defaultEmotionDropdown.SettingId &&
-                setting is SSDropdownSetting) ||
-               (_enableTalking != null &&
-                settingId == _enableTalking.SettingId &&
-                setting is SSTwoButtonsSetting);
     }
 
     private bool IsOwnedSetting(ServerSpecificSettingBase setting)
@@ -482,9 +339,5 @@ public sealed class SSTalkySettings
     }
 
     private static bool IsValidEmotion(int selection) =>
-        selection >= PlayerSettingAdmission.MinimumEmotionIndex &&
-        selection <= PlayerSettingAdmission.MaximumEmotionIndex;
-
-    private static double MonotonicSeconds() =>
-        Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+        selection >= MinEmotion && selection <= MaxEmotion;
 }

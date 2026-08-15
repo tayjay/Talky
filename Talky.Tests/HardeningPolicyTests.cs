@@ -1,5 +1,4 @@
 ﻿using System;
-using Talky.Security;
 using Talky.Settings;
 
 namespace Talky.Tests;
@@ -9,62 +8,8 @@ internal static class HardeningPolicyTests
     public static int Run()
     {
         int assertions = 0;
-        TestGrabAdmission(ref assertions);
-        TestEmotionAdmission(ref assertions);
-        TestSettingAdmissionAllocation(ref assertions);
         TestFunctionalConfigValidation(ref assertions);
         return assertions;
-    }
-
-    private static void TestGrabAdmission(ref int assertions)
-    {
-        PlayerSettingAdmission state = new PlayerSettingAdmission();
-        Equal(GrabAdmission.Accepted, state.ObserveGrab(true, 0d),
-            "First grab edge is accepted", ref assertions);
-        Equal(GrabAdmission.DuplicatePress, state.ObserveGrab(true, 0.1d),
-            "Repeated pressed messages are not new edges", ref assertions);
-        Equal(GrabAdmission.Released, state.ObserveGrab(false, 0.2d),
-            "Release arms a future edge", ref assertions);
-        Equal(GrabAdmission.Throttled, state.ObserveGrab(true, 1d),
-            "A new edge inside the animation window is throttled", ref assertions);
-        Equal(GrabAdmission.Released, state.ObserveGrab(false, 1.05d),
-            "Release after throttle is observed", ref assertions);
-        Equal(GrabAdmission.Accepted,
-            state.ObserveGrab(true, PlayerSettingAdmission.GrabAnimationSeconds),
-            "Animation boundary admits the next edge", ref assertions);
-        Equal(GrabAdmission.InvalidTime, state.ObserveGrab(false, double.NaN),
-            "Non-finite admission time fails closed", ref assertions);
-    }
-
-    private static void TestEmotionAdmission(ref int assertions)
-    {
-        PlayerSettingAdmission state = new PlayerSettingAdmission();
-        Equal(EmotionAdmission.InvalidSelection, state.ObserveEmotion(-1, 0d),
-            "Negative emotion is rejected", ref assertions);
-        Equal(EmotionAdmission.InvalidSelection, state.ObserveEmotion(7, 0d),
-            "Out-of-range emotion is rejected", ref assertions);
-        Equal(EmotionAdmission.Applied, state.ObserveEmotion(1, 0d),
-            "First valid emotion applies immediately", ref assertions);
-        Equal(EmotionAdmission.Coalesced, state.ObserveEmotion(2, 0.1d),
-            "Rapid emotion is coalesced", ref assertions);
-        Equal(EmotionAdmission.Coalesced, state.ObserveEmotion(3, 0.2d),
-            "Latest rapid emotion replaces the intermediate choice", ref assertions);
-        True(!state.TryTakePendingEmotion(0.49d, out _),
-            "Pending emotion waits for the half-second boundary", ref assertions);
-        True(state.TryTakePendingEmotion(0.5d, out int pending) && pending == 3,
-            "Only the latest coalesced emotion is applied", ref assertions);
-        Equal(EmotionAdmission.Duplicate, state.ObserveEmotion(3, 0.6d),
-            "Already-applied emotion does not rebroadcast", ref assertions);
-
-        state.Reset();
-        Equal(EmotionAdmission.Applied, state.ObserveEmotion(1, 1d),
-            "Reset state accepts a fresh emotion", ref assertions);
-        Equal(EmotionAdmission.Coalesced, state.ObserveEmotion(2, 1.1d),
-            "Reset state still enforces cadence", ref assertions);
-        Equal(EmotionAdmission.Duplicate, state.ObserveEmotion(1, 1.2d),
-            "Returning to active emotion cancels an intermediate pending value", ref assertions);
-        True(!state.HasPendingEmotion,
-            "Canceled intermediate emotion is no longer pending", ref assertions);
     }
 
     private static void TestFunctionalConfigValidation(ref int assertions)
@@ -133,26 +78,6 @@ internal static class HardeningPolicyTests
             FunctionalConfigValidator.ValidateAndApply(valid);
         True(!validResult.WasCorrected,
             "Default functional configuration remains unchanged", ref assertions);
-    }
-
-    private static void TestSettingAdmissionAllocation(ref int assertions)
-    {
-        PlayerSettingAdmission state = new PlayerSettingAdmission();
-        state.ObserveGrab(false, 0d);
-        state.ObserveEmotion(0, 0d);
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 1; i <= 10000; i++)
-        {
-            double now = i * PlayerSettingAdmission.GrabAnimationSeconds;
-            state.ObserveGrab(false, now);
-            state.ObserveGrab(true, now);
-            state.ObserveEmotion(i % 7, i * 0.5d);
-            state.TryTakePendingEmotion(i * 0.5d, out _);
-        }
-
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Equal(0L, allocated, "Setting admission hot path does not allocate", ref assertions);
     }
 
     private static void True(bool value, string message, ref int assertions)
