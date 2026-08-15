@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using LabApi.Features.Wrappers;
 using PlayerRoles;
@@ -385,8 +385,7 @@ public sealed class SpeechTracker : MonoBehaviour
 
     public void OverrideEmotion(EmotionPresetType preset, float durationSeconds)
     {
-        if (!ShouldAnimateFace || _disposed ||
-            Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
+        if (!ShouldAnimateFace || _disposed)
             return;
 
         _overridePreset = preset;

@@ -657,8 +657,7 @@ public class FakeLookHandler
 
     private static bool AnimationEventsEnabled()
     {
-        TalkyRuntime runtime = Plugin.Instance?.Runtime;
-        return runtime?.IsEnabled == true && !runtime.IsAnimationQuarantined;
+        return Plugin.Instance?.Runtime?.IsEnabled == true;
     }
 
     public void ConfigureSyncMode(CedModLookSyncMode mode)

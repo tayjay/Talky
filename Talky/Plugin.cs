@@ -413,7 +413,7 @@ public class Plugin : Plugin<Config>
         Config ??= new Config();
         ValidateConfiguration();
         PerformanceMonitor?.Reconfigure(Config);
-        Runtime?.ResetFailureQuarantine();
+        Runtime?.ResetFaultDiagnostics();
         ApplyCurrentPerformancePolicy();
     }
 

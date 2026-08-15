@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Talky.Security;
 using Talky.Settings;
 
@@ -12,7 +12,6 @@ internal static class HardeningPolicyTests
         TestGrabAdmission(ref assertions);
         TestEmotionAdmission(ref assertions);
         TestSettingAdmissionAllocation(ref assertions);
-        TestRecurringFailureQuarantine(ref assertions);
         TestFunctionalConfigValidation(ref assertions);
         return assertions;
     }
@@ -154,40 +153,6 @@ internal static class HardeningPolicyTests
 
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Equal(0L, allocated, "Setting admission hot path does not allocate", ref assertions);
-    }
-
-    private static void TestRecurringFailureQuarantine(ref int assertions)
-    {
-        ConsecutiveFailureCircuitBreaker breaker =
-            new ConsecutiveFailureCircuitBreaker();
-        const int facePhase = 3;
-        const int idleFramePhase = 1;
-
-        True(!breaker.RecordFailure(typeof(InvalidOperationException), facePhase),
-            "First recurring failure is recorded", ref assertions);
-        breaker.RecordSuccess(idleFramePhase);
-        True(!breaker.RecordFailure(typeof(InvalidOperationException), facePhase),
-            "Unrelated idle success does not erase a lower-cadence failure", ref assertions);
-        breaker.RecordSuccess(idleFramePhase);
-        True(breaker.RecordFailure(typeof(InvalidOperationException), facePhase),
-            "Third same-type phase failure activates quarantine", ref assertions);
-        True(breaker.IsQuarantined &&
-             breaker.FailureCount == ConsecutiveFailureCircuitBreaker.FailureThreshold,
-            "Quarantine retains triggering evidence", ref assertions);
-        True(!breaker.RecordFailure(typeof(InvalidOperationException), facePhase),
-            "Quarantine activates only once", ref assertions);
-
-        breaker.Reset();
-        True(!breaker.IsQuarantined && breaker.FailureCount == 0,
-            "Round or reload reset clears recurring-failure state", ref assertions);
-        breaker.RecordFailure(typeof(InvalidOperationException), facePhase);
-        breaker.RecordSuccess(facePhase);
-        True(breaker.FailureCount == 0,
-            "Successful execution of the failed phase resets the streak", ref assertions);
-        breaker.RecordFailure(typeof(InvalidOperationException), facePhase);
-        breaker.RecordFailure(typeof(ArgumentException), facePhase);
-        True(breaker.FailureCount == 1 && breaker.FailureType == typeof(ArgumentException),
-            "A different exception type starts a new streak", ref assertions);
     }
 
     private static void True(bool value, string message, ref int assertions)

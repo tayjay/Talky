@@ -202,8 +202,7 @@ public sealed class SSTalkySettings
     /// </summary>
     public void ProcessPendingEmotionChanges(double nowSeconds)
     {
-        if (!_active || _admissionByNetworkId.Count == 0 ||
-            Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
+        if (!_active || _admissionByNetworkId.Count == 0)
             return;
 
         foreach (KeyValuePair<uint, PlayerSettingAdmission> pair in _admissionByNetworkId)
@@ -273,12 +272,6 @@ public sealed class SSTalkySettings
         if (_grabKeybind != null && setting.SettingId == _grabKeybind.SettingId &&
             setting is SSKeybindSetting keybind)
         {
-            if (Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
-            {
-                monitor?.Count(PerformanceCounter.AnimationRpcThrottled);
-                return;
-            }
-
             PlayerSettingAdmission admission = GetAdmission(hub.netId);
             GrabAdmission result = admission.ObserveGrab(keybind.SyncIsPressed, nowSeconds);
             if (result == GrabAdmission.Throttled || result == GrabAdmission.InvalidTime)
@@ -308,9 +301,6 @@ public sealed class SSTalkySettings
                 monitor?.Count(PerformanceCounter.InvalidEmotionSelections);
                 return;
             }
-
-            if (Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
-                return;
 
             PlayerSettingAdmission admission = GetAdmission(hub.netId);
             bool hadPending = admission.HasPendingEmotion;
@@ -350,9 +340,6 @@ public sealed class SSTalkySettings
         ReferenceHub hub,
         TalkyPerformanceMonitor monitor)
     {
-        if (Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
-            return;
-
         Player player = Player.Get(hub);
         if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
                 hub.netId,
@@ -421,7 +408,7 @@ public sealed class SSTalkySettings
 
     private static void ApplyEmotion(ReferenceHub hub, EmotionPresetType preset)
     {
-        if (hub == null || Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
+        if (hub == null)
             return;
 
         Player player = Player.Get(hub);
@@ -441,9 +428,6 @@ public sealed class SSTalkySettings
 
     private static void ApplyEmotion(uint networkId, EmotionPresetType preset)
     {
-        if (Plugin.Instance?.Runtime?.IsAnimationQuarantined == true)
-            return;
-
         if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
                 networkId,
                 out SpeechTracker tracker) != true ||
