@@ -34,7 +34,6 @@
     <Compile Include="HardeningPolicyTests.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="RollingSpeechPercentilesTests.cs" />
-    <Compile Include="VoiceSecurityPolicyTests.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

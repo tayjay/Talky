@@ -58,9 +58,6 @@
         <Compile Include="Settings\Config.cs" />
         <Compile Include="Settings\FunctionalConfigValidator.cs" />
         <Compile Include="Settings\TranslationsConfig.cs" />
-        <Compile Include="Security\VoiceAnalysisCircuitBreaker.cs" />
-        <Compile Include="Security\VoiceFailureDiagnosticGate.cs" />
-        <Compile Include="Security\VoicePacketBoundsPolicy.cs" />
         <Compile Include="Security\PlayerSettingAdmission.cs" />
         <Compile Include="TalkyBridge.cs" />
         <Compile Include="Voice\RollingSpeechPercentiles.cs" />
