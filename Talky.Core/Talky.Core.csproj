@@ -44,7 +44,6 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Compatibility\CedModCompatibilityPolicy.cs" />
-        <Compile Include="Compatibility\CedModBinaryCompatibilityPolicy.cs" />
         <Compile Include="Compatibility\CedModRewritePolicy.cs" />
         <Compile Include="Performance\AdaptivePerformanceGovernor.cs" />
         <Compile Include="Performance\EffectivePerformancePolicy.cs" />
