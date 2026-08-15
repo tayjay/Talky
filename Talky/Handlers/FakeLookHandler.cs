@@ -51,7 +51,6 @@ public class FakeLookHandler
     private bool _pendingPreviousCaptured;
     private bool _registered;
     private bool _directSyncRegistered;
-    public bool HasEventSubscriptions => _registered || _directSyncRegistered;
     private CedModLookSyncMode _syncMode = CedModLookSyncMode.StockSync;
 
     private TalkyRuntime Runtime => Plugin.Instance?.Runtime;

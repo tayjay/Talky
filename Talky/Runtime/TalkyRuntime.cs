@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using GameCore;
@@ -82,7 +82,6 @@ public sealed class TalkyRuntime : IDisposable
     }
 
     public bool IsEnabled => _enabled;
-    public bool HasUpdateSubscription => _updateSubscribed;
     public TalkyRuntimePolicy Policy => _policy;
     public EffectivePerformancePolicy EffectivePerformancePolicy => _effectivePerformancePolicy;
     public IReadOnlyDictionary<uint, SpeechTracker> SpeechTrackers => _speechByNetworkId;

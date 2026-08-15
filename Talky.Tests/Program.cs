@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Talky.Performance;
 using Talky.Settings;
@@ -20,7 +20,6 @@ internal static class Program
             _assertions += CedModCompatibilityTests.Run();
             _assertions += VoiceSecurityPolicyTests.Run();
             _assertions += HardeningPolicyTests.Run();
-            _assertions += TalkyDiagnosticsSnapshotTests.Run();
             TestVoicePresentationState();
             TestConfigurationAndPolicy();
             TestRecentSpeakerExpiry();

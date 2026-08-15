@@ -87,7 +87,6 @@ public class Plugin : Plugin<Config>
 
         if (HasOwnedLifecycleState())
         {
-            PerformanceMonitor?.Count(PerformanceCounter.LifecycleEnableFailures);
             throw new InvalidOperationException(
                 "Talky cannot enable while subscriptions, runtime objects, settings, " +
                 "coroutines, or Harmony patches from an earlier lifecycle remain owned. " +
@@ -97,21 +96,12 @@ public class Plugin : Plugin<Config>
         _enabled = true;
         _fullyEnabled = false;
         int generation = ++_lifecycleGeneration;
-        long lifecycleStarted = PerformanceProfiler.NotSampled;
         try
         {
             Config ??= new Config();
-            int configCorrections = ValidateConfiguration();
+            ValidateConfiguration();
 
             PerformanceMonitor = new TalkyPerformanceMonitor(Config);
-            PerformanceMonitor.Count(PerformanceCounter.LifecycleEnableAttempts);
-            if (configCorrections != 0)
-            {
-                PerformanceMonitor.Count(
-                    PerformanceCounter.ConfigCorrections,
-                    configCorrections);
-            }
-            lifecycleStarted = PerformanceMonitor.Begin(PerformanceMetric.Lifecycle, 1);
 
             Settings = new SSTalkySettings();
             Settings.Activate();
@@ -138,7 +128,6 @@ public class Plugin : Plugin<Config>
         }
         catch
         {
-            PerformanceMonitor?.Count(PerformanceCounter.LifecycleEnableFailures);
             try
             {
                 Disable();
@@ -150,20 +139,11 @@ public class Plugin : Plugin<Config>
 
             throw;
         }
-        finally
-        {
-            PerformanceMonitor?.End(PerformanceMetric.Lifecycle, lifecycleStarted);
-        }
     }
     
  
     public override void Disable()
     {
-        TalkyPerformanceMonitor lifecycleMonitor = PerformanceMonitor;
-        PublishLifecycleState(TalkyDiagnosticsLifecycleState.Disabling);
-        lifecycleMonitor?.Count(PerformanceCounter.LifecycleDisableAttempts);
-        long lifecycleStarted = lifecycleMonitor?.Begin(PerformanceMetric.Lifecycle, 1) ??
-                                PerformanceProfiler.NotSampled;
         bool hadOwnedState =
             _enabled ||
             _fullyEnabled ||
@@ -232,25 +212,14 @@ public class Plugin : Plugin<Config>
 
         bool hasNonMonitorResidue =
             HasOwnedLifecycleState(includePerformanceMonitor: false);
-        PublishLifecycleState(
-            hasNonMonitorResidue
-                ? TalkyDiagnosticsLifecycleState.Faulted
-                : TalkyDiagnosticsLifecycleState.Disabled);
-        lifecycleMonitor?.End(PerformanceMetric.Lifecycle, lifecycleStarted);
 
-        // Keep diagnostics readable while cleanup is unresolved. A later Disable() retry will
-        // reuse the monitor, record the retry, and dispose it only after all other ownership is
-        // demonstrably gone.
+        // A later Disable() retry reuses the monitor and disposes it only after all other
+        // ownership is demonstrably gone.
         TalkyPerformanceMonitor performanceMonitor = PerformanceMonitor;
-        if (!hasNonMonitorResidue && performanceMonitor != null)
+        if (!hasNonMonitorResidue && performanceMonitor != null &&
+            TryCleanup("dispose the performance monitor", performanceMonitor.Dispose))
         {
-            bool monitorCleanupSucceeded = TryCleanup(
-                "dispose the performance monitor",
-                performanceMonitor.Dispose);
-            if (monitorCleanupSucceeded)
-                PerformanceMonitor = null;
-            else
-                PublishLifecycleState(TalkyDiagnosticsLifecycleState.Faulted);
+            PerformanceMonitor = null;
         }
 
         if (hadOwnedState)
@@ -266,10 +235,6 @@ public class Plugin : Plugin<Config>
 
     private static bool TryCleanup(string operation, Action cleanup)
     {
-        TalkyPerformanceMonitor monitor = Instance?.PerformanceMonitor;
-        monitor?.Count(PerformanceCounter.LifecycleCleanupAttempts);
-        long started = monitor?.Begin(PerformanceMetric.Lifecycle, 1) ??
-                       PerformanceProfiler.NotSampled;
         try
         {
             cleanup();
@@ -277,38 +242,9 @@ public class Plugin : Plugin<Config>
         }
         catch (Exception exception)
         {
-            monitor?.Count(PerformanceCounter.CleanupFailures);
             Logger.Error($"Talky failed to {operation}: {exception}");
             return false;
         }
-        finally
-        {
-            monitor?.End(PerformanceMetric.Lifecycle, started);
-        }
-    }
-
-    private void PublishLifecycleState(TalkyDiagnosticsLifecycleState lifecycle)
-    {
-        TalkyPerformanceMonitor monitor = PerformanceMonitor;
-        if (monitor == null)
-            return;
-
-        long subscriptionGroups = 0L;
-        if (_pluginsEnabledSubscribed)
-            subscriptionGroups++;
-        if (Runtime?.HasUpdateSubscription == true)
-            subscriptionGroups++;
-        if (VoiceChattingHandler?.IsRegistered == true)
-            subscriptionGroups++;
-        if (FakeLookHandler?.HasEventSubscriptions == true)
-            subscriptionGroups++;
-        if (Settings?.HasEventSubscription == true)
-            subscriptionGroups++;
-
-        monitor.SetGauge(
-            PerformanceCounter.OwnedSubscriptionGroupsCurrent,
-            subscriptionGroups);
-        monitor.SetDiagnosticsLifecycleState(lifecycle);
     }
 
     private static void RemoveCedModPatchIfPresent()
@@ -373,9 +309,6 @@ public class Plugin : Plugin<Config>
             return;
         }
 
-        TalkyPerformanceMonitor monitor = PerformanceMonitor;
-        long lifecycleStarted = monitor?.Begin(PerformanceMetric.Lifecycle, 1) ??
-                                PerformanceProfiler.NotSampled;
         try
         {
             CedModRuntimeProbe labApiProbe = CedModBridge.ProbeCandidates(
@@ -422,8 +355,6 @@ public class Plugin : Plugin<Config>
             FakeLookHandler.ConfigureSyncMode(plan.Mode);
             FakeLookHandler.RegisterEvents();
             _fullyEnabled = true;
-            PublishCompatibilityIdentity(selection, plan, patchApplied);
-            PublishLifecycleState(TalkyDiagnosticsLifecycleState.Enabled);
 
             LogCedModCompatibility(
                 labApiProbe,
@@ -435,7 +366,6 @@ public class Plugin : Plugin<Config>
         }
         catch (Exception exception)
         {
-            PublishLifecycleState(TalkyDiagnosticsLifecycleState.Faulted);
             Logger.Error("Talky post-enable setup failed: " + exception);
             bool eventCleanupSucceeded = true;
             try
@@ -465,14 +395,6 @@ public class Plugin : Plugin<Config>
                 FakeLookHandler.ConfigureSyncMode(CedModLookSyncMode.CedModUnsupported);
                 FakeLookHandler.RegisterEvents();
                 _fullyEnabled = true;
-                monitor?.SetDiagnosticsCompatibilityIdentity(
-                    HarmonyBridge.HarmonyPresent()
-                        ? TalkyDiagnosticsTrustState.Failed
-                        : TalkyDiagnosticsTrustState.NotPresent,
-                    TalkyDiagnosticsTrustState.Rejected,
-                    true,
-                    CedModLookSyncMode.CedModUnsupported);
-                PublishLifecycleState(TalkyDiagnosticsLifecycleState.Enabled);
                 Logger.Error(
                     "Talky recovered in common-events-only mode; outbound head-sync " +
                     "rewriting is disabled, while other Talky features remain enabled.");
@@ -483,96 +405,17 @@ public class Plugin : Plugin<Config>
                 Disable();
             }
         }
-        finally
-        {
-            monitor?.End(PerformanceMetric.Lifecycle, lifecycleStarted);
-        }
-    }
-
-    private void PublishCompatibilityIdentity(
-        CedModSelection selection,
-        CedModLookSyncPlan plan,
-        bool patchApplied)
-    {
-        bool harmonyPresent = HarmonyBridge.HarmonyPresent();
-        TalkyDiagnosticsTrustState harmonyState = !harmonyPresent
-            ? TalkyDiagnosticsTrustState.NotPresent
-            : selection.State == CedModPluginState.FakeSync
-                ? patchApplied
-                    ? TalkyDiagnosticsTrustState.Verified
-                    : TalkyDiagnosticsTrustState.Failed
-                : TalkyDiagnosticsTrustState.Unknown;
-
-        TalkyDiagnosticsTrustState cedModState;
-        switch (selection.State)
-        {
-            case CedModPluginState.NotPresent:
-                cedModState = TalkyDiagnosticsTrustState.NotPresent;
-                break;
-            case CedModPluginState.FakeSync when patchApplied:
-                cedModState = TalkyDiagnosticsTrustState.Verified;
-                break;
-            case CedModPluginState.FakeSync when !harmonyPresent:
-                // The semantic verifier is part of patch admission and could not run.
-                cedModState = TalkyDiagnosticsTrustState.Unknown;
-                break;
-            case CedModPluginState.FakeSync:
-            case CedModPluginState.Unreadable:
-                cedModState = TalkyDiagnosticsTrustState.Rejected;
-                break;
-            default:
-                // Stock-sync CedMod is configuration-compatible, but its binary is not part of
-                // the narrower fake-sync rewrite allowlist.
-                cedModState = TalkyDiagnosticsTrustState.Unknown;
-                break;
-        }
-
-        PerformanceMonitor?.SetDiagnosticsCompatibilityIdentity(
-            harmonyState,
-            cedModState,
-            true,
-            plan.Mode);
     }
 
     public override void LoadConfigs()
     {
         base.LoadConfigs();
         Config ??= new Config();
-        int corrections = ValidateConfiguration();
+        ValidateConfiguration();
         PerformanceMonitor?.Reconfigure(Config);
-        PerformanceMonitor?.Count(PerformanceCounter.ConfigCorrections, corrections);
-        long started = PerformanceMonitor?.Begin(PerformanceMetric.ConfigReload, 1) ??
-                       PerformanceProfiler.NotSampled;
-        try
-        {
-            Runtime?.ResetFailureQuarantine();
-            ApplyCurrentPerformancePolicy();
-            Runtime?.RefreshDiagnosticsGauges();
-            PublishLifecycleState(
-                _fullyEnabled
-                    ? TalkyDiagnosticsLifecycleState.Enabled
-                    : _enabled
-                        ? TalkyDiagnosticsLifecycleState.Enabling
-                        : TalkyDiagnosticsLifecycleState.Disabled);
-        }
-        finally
-        {
-            PerformanceMonitor?.End(PerformanceMetric.ConfigReload, started);
-        }
-    }
-
-    /// <summary>
-    /// Returns the last completed aggregate diagnostics publication. The returned schema-v1
-    /// object is immutable and contains no player identifiers or captured voice data.
-    /// </summary>
-    public bool TryGetDiagnosticsSnapshot(out TalkyDiagnosticsSnapshot snapshot)
-    {
-        TalkyPerformanceMonitor monitor = PerformanceMonitor;
-        if (monitor != null)
-            return monitor.TryGetDiagnosticsSnapshot(out snapshot);
-
-        snapshot = null;
-        return false;
+        Runtime?.ResetFailureQuarantine();
+        ApplyCurrentPerformancePolicy();
+        Runtime?.RefreshDiagnosticsGauges();
     }
 
     internal void ApplyCurrentPerformancePolicy()

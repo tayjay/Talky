@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -34,7 +34,6 @@ public sealed class SSTalkySettings
 
     public bool HasCleanupResidue =>
         _cleanupPending || _eventSubscribed || _settingsPublished || _ownedSettings != null;
-    public bool HasEventSubscription => _eventSubscribed;
     public int PendingEmotionCount => _pendingEmotionCount;
 
     public void Activate()
