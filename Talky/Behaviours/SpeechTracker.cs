@@ -182,8 +182,10 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_disposed || _player == null)
             return;
 
-        if (_overrideEndTime > now)
-            return;
+        try
+        {
+            if (_overrideEndTime > now)
+                return;
 
             if (_overrideEndTime != 0f)
             {
@@ -243,17 +245,22 @@ public sealed class SpeechTracker : MonoBehaviour
                 return;
 
             _lastLevel = level;
-        switch (level)
+            switch (level)
+            {
+                case SpeechLevel.Silent:
+                    ApplyEmotion(EmotionPresetType.Neutral);
+                    break;
+                case SpeechLevel.Quiet:
+                    ApplyEmotion(EmotionPresetType.Happy);
+                    break;
+                case SpeechLevel.Loud:
+                    ApplyEmotion(EmotionPresetType.Scared);
+                    break;
+            }
+        }
+        catch (Exception exception)
         {
-            case SpeechLevel.Silent:
-                ApplyEmotion(EmotionPresetType.Neutral);
-                break;
-            case SpeechLevel.Quiet:
-                ApplyEmotion(EmotionPresetType.Happy);
-                break;
-            case SpeechLevel.Loud:
-                ApplyEmotion(EmotionPresetType.Scared);
-                break;
+            Logger.Debug(exception, Plugin.Instance?.Config?.Debug == true);
         }
     }
 
@@ -407,11 +414,6 @@ public sealed class SpeechTracker : MonoBehaviour
 
     public void Reset()
     {
-        ResetState(applyDefaultEmotion: true);
-    }
-
-    private void ResetState(bool applyDefaultEmotion)
-    {
         _energy.Reset();
         _speechPercentiles.Reset();
         ResetSpeechRangeObservationWindow();
@@ -424,8 +426,7 @@ public sealed class SpeechTracker : MonoBehaviour
         _hasAppliedPreset = false;
         RecentSpeakerIndex = -1;
         HasGlanceSnapshot = false;
-        if (applyDefaultEmotion)
-            ApplyEmotion(defaultPreset);
+        ApplyEmotion(defaultPreset);
     }
 
     public void Dispose()
@@ -433,13 +434,19 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_disposed)
             return;
 
-        // Become inert before any reset operation. Teardown deliberately avoids Player.Emotion
-        // writes, which are not required to release Talky's ownership and can fail during a role
-        // transition or destroyed-player cleanup.
+        // Become inert before resetting so a failed teardown cannot leave this tracker registered.
+        // The reset still restores the default face: Dispose runs against live players on plugin
+        // disable and round restart, and skipping it freezes every face mid-expression.
         _disposed = true;
         try
         {
-            ResetState(applyDefaultEmotion: false);
+            Reset();
+        }
+        catch (Exception exception)
+        {
+            // Releasing Talky's ownership matters more than the final Player.Emotion write, which
+            // can fail during a role transition or destroyed-player cleanup.
+            Logger.Debug(exception, Plugin.Instance?.Config?.Debug == true);
         }
         finally
         {

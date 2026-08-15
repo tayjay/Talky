@@ -11,7 +11,7 @@ internal static class TalkyDiagnosticsSnapshotTests
     public static int Run()
     {
         _assertions = 0;
-        TestDefaultLoggingIsOptIn();
+        TestDefaultLoggingInterval();
         TestGaugeAggregationInWindow();
         TestImmutableIntervalAggregation();
         TestRoundHighWaterResetPreservesTotals();
@@ -20,13 +20,13 @@ internal static class TalkyDiagnosticsSnapshotTests
         return _assertions;
     }
 
-    private static void TestDefaultLoggingIsOptIn()
+    private static void TestDefaultLoggingInterval()
     {
-        Equal(0, new PerformanceConfig().SummaryLogIntervalSeconds, "Summary logging defaults off");
+        Equal(300, new PerformanceConfig().SummaryLogIntervalSeconds, "Default summary interval");
 
         PerformanceConfigValidationResult validation = PerformanceConfigValidator.Validate(
             new PerformanceConfig { SummaryLogIntervalSeconds = -1 });
-        Equal(0, validation.Config.SummaryLogIntervalSeconds, "Invalid summary interval falls back off");
+        Equal(0, validation.Config.SummaryLogIntervalSeconds, "Negative summary interval clamps to zero");
     }
 
     private static void TestGaugeAggregationInWindow()

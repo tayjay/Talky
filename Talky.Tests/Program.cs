@@ -165,7 +165,7 @@ internal static class Program
         Equal(10, defaults.EconomyGlanceHz, "Default economy glance rate");
         Equal(30, defaults.EconomyLookHz, "Default economy look rate");
         Equal(15, defaults.MinimumFaceHz, "Default minimum face rate");
-        Equal(0, defaults.SummaryLogIntervalSeconds, "Default summary interval is opt-in");
+        Equal(300, defaults.SummaryLogIntervalSeconds, "Default summary interval");
 
         PerformanceConfig invalid = new PerformanceConfig
         {
