@@ -55,7 +55,6 @@
         <Compile Include="Performance\PerformanceTransitionTracker.cs" />
         <Compile Include="Performance\RollingVoiceEnergy.cs" />
         <Compile Include="Settings\Config.cs" />
-        <Compile Include="Settings\FunctionalConfigValidator.cs" />
         <Compile Include="Settings\TranslationsConfig.cs" />
         <Compile Include="TalkyBridge.cs" />
         <Compile Include="Voice\RollingSpeechPercentiles.cs" />

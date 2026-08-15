@@ -31,7 +31,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CedModCompatibilityTests.cs" />
-    <Compile Include="HardeningPolicyTests.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="RollingSpeechPercentilesTests.cs" />
   </ItemGroup>

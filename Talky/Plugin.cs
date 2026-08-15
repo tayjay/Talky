@@ -427,30 +427,32 @@ public class Plugin : Plugin<Config>
         Runtime.ApplyPerformancePolicy(policy);
     }
 
-    private int ValidateConfiguration()
+    private void ValidateConfiguration()
     {
-        FunctionalConfigValidationResult functionalValidation =
-            FunctionalConfigValidator.ValidateAndApply(Config);
-        PerformanceConfigValidationResult validation =
-            PerformanceConfigValidator.ValidateAndApply(Config);
-        int correctionCount =
-            functionalValidation.CorrectionCount + validation.CorrectionCount;
+        // SSTalkySettings.Activate dereferences every Translations member. A config file with a
+        // bare "translations:" key and nothing indented beneath it deserializes to null, and the
+        // resulting NullReferenceException surfaces as an unexplained Talky load failure.
+        Config.Translations ??= new TranslationsConfig();
 
-        if (functionalValidation.WasCorrected)
+        // Deliberately warned about rather than corrected. SpeechTracker.NormalizeSpeechCeiling
+        // already widens an inverted range where it is used, and it does so while keeping the
+        // administrator's floor -- resetting both anchors to defaults would discard it.
+        if (Config.LowDbThreshold >= Config.HighDbThreshold)
         {
             Logger.Warn(
-                $"Talky corrected {functionalValidation.CorrectionCount} functional " +
-                $"setting(s): {functionalValidation.CorrectionSummary}");
+                $"Talky's low_db_threshold ({Config.LowDbThreshold}) is not below " +
+                $"high_db_threshold ({Config.HighDbThreshold}); the speech range will be " +
+                "widened automatically.");
         }
 
+        PerformanceConfigValidationResult validation =
+            PerformanceConfigValidator.ValidateAndApply(Config);
         if (validation.WasCorrected)
         {
             Logger.Warn(
                 $"Talky corrected {validation.CorrectionCount} performance setting(s): " +
                 validation.CorrectionSummary);
         }
-
-        return correctionCount;
     }
         
     private void LogCedModCompatibility(
