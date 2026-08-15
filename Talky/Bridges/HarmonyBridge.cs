@@ -291,6 +291,12 @@ internal static class HarmonyRuntimeBridge
             }
 
             RemovePatchesInternal();
+
+            // Re-arm after the sweep. RemovePatchesInternal ends in ClearPatchState, which
+            // clears the ownership flag, and everything below this line can leave a live
+            // Talky-owned patch behind. Without this the flag is 0 while _patched is true, and
+            // RemovePatches() returns at its RuntimeOwnershipPossible guard without unpatching.
+            HarmonyBridge.MarkRuntimeOwnershipPossible();
             _harmony = new Harmony(OwnerId);
             _target = target;
 
