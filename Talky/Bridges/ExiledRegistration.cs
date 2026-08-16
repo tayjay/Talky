@@ -3,9 +3,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Exiled.API.Features;
-using Exiled.API.Interfaces;
-using Exiled.Loader;
 using LabApi.Loader;
 using Talky.Core;
 
@@ -14,7 +11,7 @@ namespace Talky.Bridges;
 /// <summary>
 /// Registers the embedded EXILED shim only when EXILED is present.
 /// </summary>
-public static class ExiledRegistration
+internal static class ExiledRegistration
 {
     // The .bin suffix prevents host auto-extraction on LabAPI-only servers.
     private const string ShimResource = "Talky.Exiled.Shim.dll.bin";
@@ -37,7 +34,7 @@ public static class ExiledRegistration
     {
         // Defer to an already-enabled LabAPI instance.
         if (PluginLoader.EnabledPlugins.Any(p => p.Name == TalkyBridge.Name)) return;
-        if (LoaderPlugin.Instance == null) return;
+        if (Exiled.Loader.LoaderPlugin.Instance == null) return;
 
         LoadShimPlugin();
     }
@@ -49,7 +46,7 @@ public static class ExiledRegistration
         using Stream stream = self.GetManifestResourceStream(ShimResource);
         if (stream == null)
         {
-            Log.Error($"Embedded shim resource '{ShimResource}' was not found.");
+            Exiled.API.Features.Log.Error($"Embedded shim resource '{ShimResource}' was not found.");
             return;
         }
 
@@ -58,19 +55,30 @@ public static class ExiledRegistration
         Assembly shim = Assembly.Load(ms.ToArray());
 
         // Let EXILED create the plugin so configuration and translations bind normally.
-        IPlugin<IConfig> plugin = Loader.CreatePlugin(shim);
+        Exiled.API.Interfaces.IPlugin<Exiled.API.Interfaces.IConfig> plugin = Exiled.Loader.Loader.CreatePlugin(shim);
         if (plugin == null)
         {
-            Log.Error("The embedded EXILED shim did not yield a plugin instance.");
+            Exiled.API.Features.Log.Error("The embedded EXILED shim did not yield a plugin instance.");
             return;
         }
 
         // EXILED reloads may clear the plugin list.
-        if (!Loader.Plugins.Any<IPlugin<IConfig>>((Func<IPlugin<IConfig>, bool>)(p => p.Name == plugin.Name)))
+        bool any = false;
+        // Cannot use LINQ as it exposes Exiled types beyond "NoInlining".
+        foreach (var p in Exiled.Loader.Loader.Plugins)
         {
-            Log.Info($"Loaded plugin {plugin.Name}@{plugin.Version}");
-            Server.PluginAssemblies.Add(shim, plugin);
-            Loader.Plugins.Add(plugin);
+            if (p.Name == plugin.Name)
+            {
+                any = true;
+                break;
+            }
+        }
+
+        if (!any)
+        {
+            Exiled.API.Features.Log.Info($"Loaded plugin {plugin.Name}@{plugin.Version}");
+            Exiled.API.Features.Server.PluginAssemblies.Add(shim, plugin);
+            Exiled.Loader.Loader.Plugins.Add(plugin);
         }
     }
 }

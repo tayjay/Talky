@@ -3,7 +3,6 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using HarmonyLib;
 using LabApi.Features.Console;
 using Mirror;
 using PlayerRoles.FirstPersonControl;
@@ -156,7 +155,7 @@ internal static class HarmonyRuntimeBridge
         nameof(Postfix),
         BindingFlags.Static | BindingFlags.NonPublic);
 
-    private static Harmony _harmony;
+    private static HarmonyLib.Harmony _harmony;
     private static MethodInfo _target;
     private static bool _patched;
     private static int _callbackFailureLogged;
@@ -264,8 +263,8 @@ internal static class HarmonyRuntimeBridge
                 return false;
             }
 
-            Patches writeAllPatches = Harmony.GetPatchInfo(writeAll);
-            Patch sentinalPatch = writeAllPatches?.Prefixes.FirstOrDefault(patch =>
+            HarmonyLib.Patches writeAllPatches = HarmonyLib.Harmony.GetPatchInfo(writeAll);
+            HarmonyLib.Patch sentinalPatch = writeAllPatches?.Prefixes.FirstOrDefault(patch =>
                 Equals(patch.PatchMethod, sentinalPrefix));
             if (sentinalPatch == null)
             {
@@ -286,25 +285,25 @@ internal static class HarmonyRuntimeBridge
 
             // Re-establish cleanup ownership before creating new patch state.
             HarmonyBridge.MarkRuntimeOwnershipPossible();
-            _harmony = new Harmony(OwnerId);
+            _harmony = new HarmonyLib.Harmony(OwnerId);
             _target = target;
 
             // Remove stale owner-scoped patches before applying the current methods.
-            _harmony.Unpatch(target, HarmonyPatchType.All, OwnerId);
+            _harmony.Unpatch(target, HarmonyLib.HarmonyPatchType.All, OwnerId);
 
-            HarmonyMethod prefix = new HarmonyMethod(PrefixMethod)
+            HarmonyLib.HarmonyMethod prefix = new HarmonyLib.HarmonyMethod(PrefixMethod)
             {
-                priority = Priority.Last,
+                priority = HarmonyLib.Priority.Last,
             };
-            HarmonyMethod postfix = new HarmonyMethod(PostfixMethod)
+            HarmonyLib.HarmonyMethod postfix = new HarmonyLib.HarmonyMethod(PostfixMethod)
             {
-                priority = Priority.Last,
+                priority = HarmonyLib.Priority.Last,
             };
             _harmony.Patch(target, prefix, postfix);
 
             if (!VerifyPatch(target))
             {
-                _harmony.Unpatch(target, HarmonyPatchType.All, OwnerId);
+                _harmony.Unpatch(target, HarmonyLib.HarmonyPatchType.All, OwnerId);
                 ClearPatchState();
                 detail = DescribePatch(target, sentinalOwner, false);
                 return false;
@@ -370,21 +369,21 @@ internal static class HarmonyRuntimeBridge
 
     private static void RemovePatchesInternal()
     {
-        Harmony harmony = _harmony ?? new Harmony(OwnerId);
+        HarmonyLib.Harmony harmony = _harmony ?? new HarmonyLib.Harmony(OwnerId);
         if (_target != null)
         {
             harmony.Unpatch(
                 _target,
-                HarmonyPatchType.All,
+                HarmonyLib.HarmonyPatchType.All,
                 OwnerId);
         }
 
         // Sweep owner-scoped patches that survived a previous plugin instance.
-        foreach (MethodBase method in Harmony.GetAllPatchedMethods().ToArray())
+        foreach (MethodBase method in HarmonyLib.Harmony.GetAllPatchedMethods().ToArray())
         {
-            Patches patches = Harmony.GetPatchInfo(method);
+            HarmonyLib.Patches patches = HarmonyLib.Harmony.GetPatchInfo(method);
             if (patches?.Owners?.Contains(OwnerId) == true)
-                harmony.Unpatch(method, HarmonyPatchType.All, OwnerId);
+                harmony.Unpatch(method, HarmonyLib.HarmonyPatchType.All, OwnerId);
         }
 
         if (HasHarmonyOwnerPatches())
@@ -400,9 +399,9 @@ internal static class HarmonyRuntimeBridge
 
     private static bool HasHarmonyOwnerPatches()
     {
-        foreach (MethodBase method in Harmony.GetAllPatchedMethods())
+        foreach (MethodBase method in HarmonyLib.Harmony.GetAllPatchedMethods())
         {
-            Patches patches = Harmony.GetPatchInfo(method);
+            HarmonyLib.Patches patches = HarmonyLib.Harmony.GetPatchInfo(method);
             if (patches?.Owners?.Contains(OwnerId) == true)
                 return true;
         }
@@ -426,9 +425,9 @@ internal static class HarmonyRuntimeBridge
 
         try
         {
-            (_harmony ?? new Harmony(OwnerId)).Unpatch(
+            (_harmony ?? new HarmonyLib.Harmony(OwnerId)).Unpatch(
                 target,
-                HarmonyPatchType.All,
+                HarmonyLib.HarmonyPatchType.All,
                 OwnerId);
             return true;
         }
@@ -441,7 +440,7 @@ internal static class HarmonyRuntimeBridge
 
     private static bool VerifyPatch(MethodInfo target)
     {
-        Patches patches = Harmony.GetPatchInfo(target);
+        HarmonyLib.Patches patches = HarmonyLib.Harmony.GetPatchInfo(target);
         return patches != null &&
                patches.Prefixes.Any(patch =>
                    patch.owner == OwnerId && Equals(patch.PatchMethod, PrefixMethod)) &&
@@ -458,7 +457,7 @@ internal static class HarmonyRuntimeBridge
         string sentinalOwner,
         bool verified)
     {
-        Version harmonyVersion = typeof(Harmony).Assembly.GetName().Version;
+        Version harmonyVersion = typeof(HarmonyLib.Harmony).Assembly.GetName().Version;
         return $"owner={OwnerId}, harmony={harmonyVersion}, " +
                $"sentinal_owner={sentinalOwner}, target=" +
                $"{target.DeclaringType?.FullName}.{target}, verified={verified}";
