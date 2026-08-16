@@ -9,6 +9,7 @@ using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.NetworkMessages;
 using PlayerRoles.Spectating;
 using PlayerStatsSystem;
+using RelativePositioning;
 using Talky.Behaviours;
 using Talky.Compatibility;
 using Talky.Performance;
@@ -116,9 +117,19 @@ public class FakeLookHandler
             if (!runtime.IsLookTargetActive(_visibilityTargetId))
                 return;
 
-            _directLastSyncData = FpcServerPositionDistributor.GetPrevSyncData(
-                ev.Player.ReferenceHub,
-                ev.Target.ReferenceHub);
+            try
+            {
+                _directLastSyncData = FpcServerPositionDistributor.GetPrevSyncData(
+                    ev.Player.ReferenceHub,
+                    ev.Target.ReferenceHub);
+                SyncAccessProbe.Succeeded(SyncAccessSite.GetPrevSyncData);
+            }
+            catch (Exception exception)
+            {
+                SyncAccessProbe.Failed(SyncAccessSite.GetPrevSyncData, exception);
+                return;
+            }
+
             _pendingPreviousCaptured = true;
         }
         finally
@@ -194,9 +205,21 @@ public class FakeLookHandler
         if (!runtime.IsLookTargetActive(target.netId))
             return role;
 
+        int[] bufferPlayerIds;
+        try
+        {
+            bufferPlayerIds = FpcServerPositionDistributor._bufferPlayerIDs;
+            SyncAccessProbe.Succeeded(SyncAccessSite.BufferPlayerIds);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.BufferPlayerIds, exception);
+            return role;
+        }
+
         if (bufferIndex < 0 ||
-            bufferIndex >= FpcServerPositionDistributor._bufferPlayerIDs.Length ||
-            FpcServerPositionDistributor._bufferPlayerIDs[bufferIndex] != target.PlayerId)
+            bufferIndex >= bufferPlayerIds.Length ||
+            bufferPlayerIds[bufferIndex] != target.PlayerId)
         {
             return role;
         }
@@ -231,7 +254,19 @@ public class FakeLookHandler
         // changes, outside the WriteAll position-distribution cycle. In that path,
         // PreviouslySent isn't populated for this receiver, _directLastSyncData is stale,
         // and the buffer indices don't correspond to this (receiver, target) pair.
-        if (!FpcServerPositionDistributor.PreviouslySent.TryGetValue(receiver.netId, out var receiverPrev))
+        Dictionary<uint, Dictionary<uint, FpcSyncData>> previouslySent;
+        try
+        {
+            previouslySent = FpcServerPositionDistributor.PreviouslySent;
+            SyncAccessProbe.Succeeded(SyncAccessSite.PreviouslySentStock);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.PreviouslySentStock, exception);
+            return role;
+        }
+
+        if (!previouslySent.TryGetValue(receiver.netId, out var receiverPrev))
         {
             return role;
         }
@@ -259,6 +294,12 @@ public class FakeLookHandler
             fpmm.MouseLook.CurrentHorizontal = originalHorizontal + lookOffset.x;
             fpmm.MouseLook.CurrentVertical = originalVertical + lookOffset.y;
             newSyncData = FpcServerPositionDistributor.GetNewSyncData(receiver, target, fpmm, false);
+            SyncAccessProbe.Succeeded(SyncAccessSite.GetNewSyncData);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.GetNewSyncData, exception);
+            return role;
         }
         finally
         {
@@ -266,7 +307,17 @@ public class FakeLookHandler
             fpmm.MouseLook.CurrentVertical = originalVertical;
         }
 
-        FpcServerPositionDistributor._bufferSyncData[bufferIndex] = newSyncData;
+        try
+        {
+            FpcServerPositionDistributor._bufferSyncData[bufferIndex] = newSyncData;
+            SyncAccessProbe.Succeeded(SyncAccessSite.BufferSyncDataWrite);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.BufferSyncDataWrite, exception);
+            return role;
+        }
+
         monitor?.Count(PerformanceCounter.Rewrites);
         return role;
     }
@@ -338,11 +389,21 @@ public class FakeLookHandler
             FpcSyncData previous = default;
             if (targetEligible && offsetFinite)
             {
-                if (FpcServerPositionDistributor.PreviouslySent.TryGetValue(
-                        receiver.netId,
-                        out var receiverPrevious))
+                try
                 {
-                    hasPrevious = receiverPrevious.TryGetValue(target.netId, out previous);
+                    if (FpcServerPositionDistributor.PreviouslySent.TryGetValue(
+                            receiver.netId,
+                            out var receiverPrevious))
+                    {
+                        hasPrevious = receiverPrevious.TryGetValue(target.netId, out previous);
+                    }
+
+                    SyncAccessProbe.Succeeded(SyncAccessSite.PreviouslySentCedModPrefix);
+                }
+                catch (Exception exception)
+                {
+                    SyncAccessProbe.Failed(SyncAccessSite.PreviouslySentCedModPrefix, exception);
+                    hasPrevious = false;
                 }
             }
 
@@ -423,10 +484,19 @@ public class FakeLookHandler
             if (!IsFinite(state.Rewrite.Offset))
                 return;
 
-            if (!FpcServerPositionDistributor.PreviouslySent.TryGetValue(
-                    receiver.netId,
-                    out var receiverPrevious))
+            Dictionary<uint, FpcSyncData> receiverPrevious;
+            try
             {
+                bool found = FpcServerPositionDistributor.PreviouslySent.TryGetValue(
+                    receiver.netId,
+                    out receiverPrevious);
+                SyncAccessProbe.Succeeded(SyncAccessSite.PreviouslySentCedModPostfix);
+                if (!found)
+                    return;
+            }
+            catch (Exception exception)
+            {
+                SyncAccessProbe.Failed(SyncAccessSite.PreviouslySentCedModPostfix, exception);
                 return;
             }
 
@@ -442,6 +512,22 @@ public class FakeLookHandler
             float originalHorizontal = fpmm.MouseLook.CurrentHorizontal;
             float originalVertical = fpmm.MouseLook.CurrentVertical;
 
+            PlayerMovementState movementState;
+            bool bitCustom;
+            RelativePosition position;
+            try
+            {
+                movementState = original._state;
+                bitCustom = original._bitCustom;
+                position = original._position;
+                SyncAccessProbe.Succeeded(SyncAccessSite.FpcSyncDataCarriedFields);
+            }
+            catch (Exception exception)
+            {
+                SyncAccessProbe.Failed(SyncAccessSite.FpcSyncDataCarriedFields, exception);
+                return;
+            }
+
             FpcSyncData rewritten;
             try
             {
@@ -449,9 +535,9 @@ public class FakeLookHandler
                 fpmm.MouseLook.CurrentVertical = originalVertical + lookOffset.y;
                 rewritten = new FpcSyncData(
                     state.Rewrite.Previous,
-                    original._state,
-                    original._bitCustom,
-                    original._position,
+                    movementState,
+                    bitCustom,
+                    position,
                     fpmm.MouseLook);
             }
             finally
@@ -575,7 +661,8 @@ public class FakeLookHandler
             return;
 
         _registered = true;
-        
+        SyncAccessProbe.Reset();
+
         LabApi.Events.Handlers.PlayerEvents.ShotWeapon += OnShoot;
         LabApi.Events.Handlers.PlayerEvents.AimedWeapon += ToggleAds;
         LabApi.Events.Handlers.PlayerEvents.UsingItem += OnStartUsingItem;
@@ -630,6 +717,7 @@ public class FakeLookHandler
         LabApi.Events.Handlers.PlayerEvents.Hurt -= OnHurt;
         ResetDirectSyncState();
         _registered = false;
+        SyncAccessProbe.LogSummary();
     }
 
     private void ResetDirectSyncState()

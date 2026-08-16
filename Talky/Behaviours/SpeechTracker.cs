@@ -32,6 +32,7 @@ public sealed class SpeechTracker : MonoBehaviour
         new VoicePresentationState();
 
     private Player _player;
+    private OpusDecoder _decoder;
     private SpeechLevel _lastLevel = SpeechLevel.Init;
     private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
     private float _overrideEndTime;
@@ -108,7 +109,29 @@ public sealed class SpeechTracker : MonoBehaviour
         }
     }
 
-    private OpusDecoder OpusDecoder => _player?.VoiceModule?.Decoder;
+    
+    private OpusDecoder OpusDecoder
+    {
+        get
+        {
+            if (_decoder != null)
+                return _decoder;
+            if (_disposed || _player == null || _player.IsDestroyed)
+                return null;
+
+            try
+            {
+                _decoder = Player.VoiceModule?.Decoder; //Publicized Assembly-CSharp makes this accessible when "Allow Unsafe Code" is enabled.
+            }
+            catch (Exception exception)
+            {
+                Logger.Debug(exception, Plugin.Instance?.Config?.Debug == true);
+                return null;
+            }
+
+            return _decoder;
+        }
+    }
 
     private void Awake()
     {
