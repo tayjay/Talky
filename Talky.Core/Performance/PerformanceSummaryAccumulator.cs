@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 
 namespace Talky.Performance;
@@ -134,21 +134,7 @@ public sealed class PerformanceSummaryAccumulator
 
         for (int index = 0; index < (int)PerformanceCounter.Count; index++)
         {
-            PerformanceCounter counter = (PerformanceCounter)index;
-            long value = window.GetCounter(counter);
-            switch (PerformanceCounterCatalog.Aggregation(counter))
-            {
-                case PerformanceCounterAggregation.Last:
-                    _counters[index] = value;
-                    break;
-                case PerformanceCounterAggregation.Maximum:
-                    if (value > _counters[index])
-                        _counters[index] = value;
-                    break;
-                default:
-                    _counters[index] += value;
-                    break;
-            }
+            _counters[index] += window.GetCounter((PerformanceCounter)index);
         }
     }
 
@@ -242,7 +228,20 @@ public sealed class PerformanceSummaryAccumulator
             $"sync_entries={GetCounter(PerformanceCounter.SyncEntries)}, " +
             $"active_target_hits={GetCounter(PerformanceCounter.ActiveTargetHits)}, " +
             $"rewrites={GetCounter(PerformanceCounter.Rewrites)}, " +
-            $"emotion_writes={GetCounter(PerformanceCounter.EmotionWrites)}.";
+            $"emotion_writes={GetCounter(PerformanceCounter.EmotionWrites)}, " +
+            // Voice pipeline attrition. voice_packets counts inbound packets, so a decode
+            // stall is invisible without the success/failure split beside it.
+            $"voice_bytes={GetCounter(PerformanceCounter.VoiceBytes)}, " +
+            $"decode_ok={GetCounter(PerformanceCounter.VoiceDecodeSuccesses)}, " +
+            $"decode_failed={GetCounter(PerformanceCounter.VoiceDecodeFailures)}, " +
+            $"remote_glance_rejections=" +
+            $"{GetCounter(PerformanceCounter.RemoteChannelGlanceRejections)}, " +
+            $"face_ticks={GetCounter(PerformanceCounter.FaceTicks)}, " +
+            $"look_ticks={GetCounter(PerformanceCounter.LookTicks)}, " +
+            $"glance_ticks={GetCounter(PerformanceCounter.GlanceTicks)}, " +
+            $"glance_selections={GetCounter(PerformanceCounter.GlanceSelections)}, " +
+            $"runtime_update_failures=" +
+            $"{GetCounter(PerformanceCounter.RuntimeUpdateFailures)}.";
     }
 
     public void Reset(double nowSeconds)

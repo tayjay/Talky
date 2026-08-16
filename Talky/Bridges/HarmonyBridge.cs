@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -15,7 +15,6 @@ namespace Talky.Bridges;
 internal static class HarmonyBridge
 {
     internal const string OwnerId = "ca.taytay.talky.cedmod-sync";
-    private const string OwnershipStateKey = "Talky.HarmonyOwnership.ca.taytay.talky.cedmod-sync";
     private static int _runtimeOwnershipPossible;
 
     /// <summary>
@@ -108,42 +107,16 @@ internal static class HarmonyBridge
     internal static void MarkRuntimeOwnershipPossible()
     {
         Interlocked.Exchange(ref _runtimeOwnershipPossible, 1);
-        try
-        {
-            AppDomain.CurrentDomain.SetData(OwnershipStateKey, true);
-        }
-        catch
-        {
-            // The in-assembly marker still preserves ownership for this loaded instance.
-        }
     }
 
     internal static void ClearRuntimeOwnershipPossible()
     {
         Interlocked.Exchange(ref _runtimeOwnershipPossible, 0);
-        try
-        {
-            AppDomain.CurrentDomain.SetData(OwnershipStateKey, false);
-        }
-        catch
-        {
-            // Clearing the process-wide marker is best effort after verified local cleanup.
-        }
     }
 
     private static bool RuntimeOwnershipPossible()
     {
-        if (Volatile.Read(ref _runtimeOwnershipPossible) != 0)
-            return true;
-
-        try
-        {
-            return AppDomain.CurrentDomain.GetData(OwnershipStateKey) is bool owned && owned;
-        }
-        catch
-        {
-            return false;
-        }
+        return Volatile.Read(ref _runtimeOwnershipPossible) != 0;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -299,17 +272,6 @@ internal static class HarmonyRuntimeBridge
                 return false;
             }
 
-            if (!CedModBinaryVerifier.TryVerify(
-                    sentinalPrefix,
-                    target,
-                    out _,
-                    out string semanticDetail))
-            {
-                RemovePatchesInternal();
-                detail = semanticDetail;
-                return false;
-            }
-
             Patches writeAllPatches = Harmony.GetPatchInfo(writeAll);
             Patch sentinalPatch = writeAllPatches?.Prefixes.FirstOrDefault(patch =>
                 Equals(patch.PatchMethod, sentinalPrefix));
@@ -324,12 +286,17 @@ internal static class HarmonyRuntimeBridge
 
             if (_patched && Equals(_target, target) && VerifyPatch(target))
             {
-                detail = semanticDetail + "; " +
-                         DescribePatch(target, sentinalOwner, true);
+                detail = DescribePatch(target, sentinalOwner, true);
                 return true;
             }
 
             RemovePatchesInternal();
+
+            // Re-arm after the sweep. RemovePatchesInternal ends in ClearPatchState, which
+            // clears the ownership flag, and everything below this line can leave a live
+            // Talky-owned patch behind. Without this the flag is 0 while _patched is true, and
+            // RemovePatches() returns at its RuntimeOwnershipPossible guard without unpatching.
+            HarmonyBridge.MarkRuntimeOwnershipPossible();
             _harmony = new Harmony(OwnerId);
             _target = target;
 
@@ -357,8 +324,7 @@ internal static class HarmonyRuntimeBridge
 
             _patched = true;
             Interlocked.Exchange(ref _callbackFailureLogged, 0);
-            detail = semanticDetail + "; " +
-                     DescribePatch(target, sentinalOwner, true);
+            detail = DescribePatch(target, sentinalOwner, true);
             return true;
         }
         catch (Exception exception)

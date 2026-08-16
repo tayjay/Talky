@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using LabApi.Events.Arguments.PlayerEvents;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
@@ -15,8 +15,6 @@ public sealed class VoiceChattingHandler
         new Dictionary<uint, SpeechTracker>();
 
     private bool _registered;
-    public bool IsRegistered => _registered;
-
     /// <summary>
     /// Compatibility view for integrations that previously read the handler cache.
     /// Runtime owns the mutable dictionary.

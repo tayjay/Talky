@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
           Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
@@ -31,11 +31,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CedModCompatibilityTests.cs" />
-    <Compile Include="HardeningPolicyTests.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="RollingSpeechPercentilesTests.cs" />
-    <Compile Include="TalkyDiagnosticsSnapshotTests.cs" />
-    <Compile Include="VoiceSecurityPolicyTests.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

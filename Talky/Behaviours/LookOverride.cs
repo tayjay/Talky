@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
@@ -37,6 +37,9 @@ public sealed class LookOverride : MonoBehaviour
         get => _lastBusyTime;
         set
         {
+            if (_disposed)
+                return;
+
             _lastBusyTime = value;
             if (value > Time.time)
                 ClearOffsets();
@@ -160,8 +163,7 @@ public sealed class LookOverride : MonoBehaviour
     {
         Config config = TalkyConfig;
         if (_disposed || config == null ||
-            Plugin.Instance?.Runtime?.IsEnabled != true ||
-            Plugin.Instance.Runtime.IsAnimationQuarantined)
+            Plugin.Instance?.Runtime?.IsEnabled != true)
             return;
 
         _reactOffset = new Vector2(0f, Math.Min(config.HeadBobAmount, damage));

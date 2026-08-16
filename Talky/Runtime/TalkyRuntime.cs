@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using GameCore;
@@ -7,7 +7,6 @@ using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using Talky.Behaviours;
 using Talky.Performance;
-using Talky.Security;
 using Talky.Settings;
 using UnityEngine;
 using VoiceChat;
@@ -23,16 +22,6 @@ public sealed class TalkyRuntime : IDisposable
 {
     private const double RuntimeFaultDiagnosticIntervalSeconds = 60d;
 
-    private enum RuntimeUpdatePhase
-    {
-        None = 0,
-        Frame = 1,
-        PendingActions = 2,
-        Face = 3,
-        Glance = 4,
-        Look = 5,
-        Monitoring = 6,
-    }
     private readonly Dictionary<uint, SpeechTracker> _speechByNetworkId =
         new Dictionary<uint, SpeechTracker>(128);
     private readonly Dictionary<uint, LookOverride> _lookByNetworkId =
@@ -46,9 +35,6 @@ public sealed class TalkyRuntime : IDisposable
     private readonly Dictionary<uint, PendingEmotion> _pendingEmotions =
         new Dictionary<uint, PendingEmotion>(128);
     private readonly List<uint> _duePendingKeys = new List<uint>(128);
-    private readonly ConsecutiveFailureCircuitBreaker _runtimeFailureBreaker =
-        new ConsecutiveFailureCircuitBreaker();
-
     private TalkyRuntimePolicy _policy;
     private EffectivePerformancePolicy _effectivePerformancePolicy;
     private bool _enabled;
@@ -59,11 +45,8 @@ public sealed class TalkyRuntime : IDisposable
     private float _nextRecentPrune;
     private float _lastLookTick;
     private bool _glancePending;
-    private bool _animationQuarantined;
     private double _nextRuntimeFaultDiagnosticAt;
     private int _suppressedRuntimeFaults;
-    private int _pendingActionHighWater;
-    private int _simultaneousSpeakersCurrent;
 
     private long _voicePackets;
     private long _decodedSamples;
@@ -82,7 +65,6 @@ public sealed class TalkyRuntime : IDisposable
     }
 
     public bool IsEnabled => _enabled;
-    public bool HasUpdateSubscription => _updateSubscribed;
     public TalkyRuntimePolicy Policy => _policy;
     public EffectivePerformancePolicy EffectivePerformancePolicy => _effectivePerformancePolicy;
     public IReadOnlyDictionary<uint, SpeechTracker> SpeechTrackers => _speechByNetworkId;
@@ -91,12 +73,6 @@ public sealed class TalkyRuntime : IDisposable
     public int RecentSpeakerCount => _recentSpeakers.Count;
     public int ActiveLookTargetCount => _activeLookTargets.Count;
     public bool HasActiveLookTargets => _activeLookTargets.Count != 0;
-    public bool IsAnimationQuarantined => _animationQuarantined;
-    public int PendingActionCount =>
-        _pendingConsumables.Count +
-        _pendingEmotions.Count +
-        (Plugin.Instance?.Settings?.PendingEmotionCount ?? 0);
-    public int PendingActionHighWater => _pendingActionHighWater;
 
     public void Enable()
     {
@@ -111,7 +87,7 @@ public sealed class TalkyRuntime : IDisposable
         _enabled = true;
         try
         {
-            ResetFailureQuarantine();
+            ResetFaultDiagnostics();
             ResetDeadlines(Time.time);
             // Mark ownership before invoking the event accessor. If it throws after partially
             // subscribing, Disable retains enough state to retry removal while OnUpdate is inert.
@@ -170,18 +146,14 @@ public sealed class TalkyRuntime : IDisposable
         _pendingEmotions.Clear();
         _duePendingKeys.Clear();
         _activeLookTargets.Clear();
-        _simultaneousSpeakersCurrent = 0;
         try
         {
-            ObservePendingActionDepth();
-            ObserveTrackerDepth();
-            ObserveSimultaneousSpeakers();
         }
         catch (Exception exception)
         {
             firstFailure ??= exception;
         }
-        ResetFailureQuarantine();
+        ResetFaultDiagnostics();
 
         if (firstFailure != null)
         {
@@ -257,7 +229,6 @@ public sealed class TalkyRuntime : IDisposable
             speech.RuntimeIndex = _speechTrackers.Count;
             _speechTrackers.Add(speech);
             _speechByNetworkId[networkId] = speech;
-            ObserveTrackerDepth();
         }
         else
         {
@@ -277,7 +248,6 @@ public sealed class TalkyRuntime : IDisposable
             look.RuntimeIndex = _lookOverrides.Count;
             _lookOverrides.Add(look);
             _lookByNetworkId[networkId] = look;
-            ObserveTrackerDepth();
         }
         else
         {
@@ -289,7 +259,6 @@ public sealed class TalkyRuntime : IDisposable
         speech.OnSpawned(now);
         look.OnSpawned(now);
         RefreshLookActivity(look);
-        ObserveTrackerDepth();
     }
 
     public void UnregisterPlayer(uint networkId, bool destroyComponents = true)
@@ -309,7 +278,6 @@ public sealed class TalkyRuntime : IDisposable
                 UnityEngine.Object.Destroy(speech);
             _speechByNetworkId.Remove(networkId);
             RemoveSpeechTracker(speech);
-            ObserveTrackerDepth();
         }
 
         if (_lookByNetworkId.TryGetValue(networkId, out LookOverride look))
@@ -319,7 +287,6 @@ public sealed class TalkyRuntime : IDisposable
                 UnityEngine.Object.Destroy(look);
             _lookByNetworkId.Remove(networkId);
             RemoveLookOverride(look);
-            ObserveTrackerDepth();
         }
     }
 
@@ -334,22 +301,17 @@ public sealed class TalkyRuntime : IDisposable
         _duePendingKeys.Clear();
         _activeLookTargets.Clear();
         Plugin.Instance?.Settings?.ResetPlayerState();
-        _pendingActionHighWater = 0;
-        _simultaneousSpeakersCurrent = 0;
-        ResetFailureQuarantine();
+        ResetFaultDiagnostics();
         ResetDeadlines(Time.time);
 
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
         monitor?.ResetForRound();
-        RefreshDiagnosticsGauges();
         if (monitor != null)
             ApplyPerformancePolicy(monitor.CurrentPolicy);
     }
 
-    public void ResetFailureQuarantine()
+    public void ResetFaultDiagnostics()
     {
-        _animationQuarantined = false;
-        _runtimeFailureBreaker.Reset();
         _nextRuntimeFaultDiagnosticAt = 0d;
         _suppressedRuntimeFaults = 0;
     }
@@ -361,13 +323,6 @@ public sealed class TalkyRuntime : IDisposable
         _lookByNetworkId.TryGetValue(networkId, out look) && look != null;
 
     public bool IsLookTargetActive(uint networkId) => _activeLookTargets.Contains(networkId);
-
-    internal void RefreshDiagnosticsGauges()
-    {
-        ObservePendingActionDepth();
-        ObserveTrackerDepth();
-        ObserveSimultaneousSpeakers();
-    }
 
     public void HandleVoice(uint networkId, byte[] data, int length)
     {
@@ -416,8 +371,7 @@ public sealed class TalkyRuntime : IDisposable
             if (!target.PresentVoiceFrom(source, decoded, now))
                 return;
 
-            if (!_animationQuarantined &&
-                _policy.EnableGlancing &&
+            if (_policy.EnableGlancing &&
                 target.LastPresentedVoiceWasAudible)
             {
                 if (channel == VoiceChatChannel.Proximity)
@@ -442,7 +396,7 @@ public sealed class TalkyRuntime : IDisposable
         float delaySeconds,
         int durationMilliseconds)
     {
-        if (!_enabled || _animationQuarantined ||
+        if (!_enabled ||
             eventArgs?.Player == null || eventArgs.UsableItem == null)
             return;
 
@@ -467,12 +421,11 @@ public sealed class TalkyRuntime : IDisposable
             coalesced
                 ? PerformanceCounter.PendingActionsCoalesced
                 : PerformanceCounter.PendingActionsQueued);
-        ObservePendingActionDepth();
     }
 
     public void TriggerEmotion(uint networkId, EmotionPresetType preset, int durationMilliseconds)
     {
-        if (!_enabled || _animationQuarantined)
+        if (!_enabled)
             return;
 
         if (TryGetSpeechTracker(networkId, out SpeechTracker tracker))
@@ -523,46 +476,22 @@ public sealed class TalkyRuntime : IDisposable
             return;
 
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        if (_animationQuarantined)
-        {
-            try
-            {
-                CompleteFrameMonitoring(monitor);
-            }
-            catch (Exception exception)
-            {
-                monitor?.Count(PerformanceCounter.RuntimeUpdateFailures);
-                monitor?.Freeze(
-                    "runtime monitoring failed while animations were quarantined: " +
-                    exception.GetType().Name);
-            }
-            return;
-        }
-
         long glanceStarted = PerformanceProfiler.NotSampled;
         bool updateFailed = false;
-        RuntimeUpdatePhase currentPhase = RuntimeUpdatePhase.Frame;
         try
         {
             float now = Time.time;
             long schedulerStarted = monitor?.Begin(PerformanceMetric.SchedulerOverhead, 1) ??
                                     PerformanceProfiler.NotSampled;
-            long pendingStarted = monitor?.Begin(PerformanceMetric.PendingActionDrain, 1) ??
-                                  PerformanceProfiler.NotSampled;
-            currentPhase = RuntimeUpdatePhase.PendingActions;
             try
             {
                 ProcessPendingConsumables(now);
                 ProcessPendingEmotions(now);
-                Plugin.Instance?.Settings?.ProcessPendingEmotionChanges(MonotonicSeconds());
-                RecordUpdatePhaseSuccess(RuntimeUpdatePhase.PendingActions);
             }
             finally
             {
-                monitor?.End(PerformanceMetric.PendingActionDrain, pendingStarted);
                 monitor?.End(PerformanceMetric.SchedulerOverhead, schedulerStarted);
             }
-            currentPhase = RuntimeUpdatePhase.Frame;
 
             if (now >= _nextSpeechTick)
             {
@@ -573,11 +502,9 @@ public sealed class TalkyRuntime : IDisposable
                 double highThreshold = config?.HighDbThreshold ?? -30d;
                 long faceStarted = monitor?.Begin(PerformanceMetric.FaceBatch, 1) ??
                                    PerformanceProfiler.NotSampled;
-                currentPhase = RuntimeUpdatePhase.Face;
                 try
                 {
                     int faceTicks = 0;
-                    int simultaneousSpeakers = 0;
                     for (int i = 0; i < _speechTrackers.Count; i++)
                     {
                         SpeechTracker tracker = _speechTrackers[i];
@@ -587,21 +514,15 @@ public sealed class TalkyRuntime : IDisposable
                         tracker.TickSpeech(now, resetTime, lowThreshold, highThreshold);
                         _speechTicks++;
                         faceTicks++;
-                        if (tracker.WasRecentlySpeaking(now, resetTime))
-                            simultaneousSpeakers++;
                     }
 
-                    _simultaneousSpeakersCurrent = simultaneousSpeakers;
                     if (faceTicks > 0)
                         monitor?.Count(PerformanceCounter.FaceTicks, faceTicks);
-                    ObserveSimultaneousSpeakers();
-                    RecordUpdatePhaseSuccess(RuntimeUpdatePhase.Face);
                 }
                 finally
                 {
                     monitor?.End(PerformanceMetric.FaceBatch, faceStarted);
                 }
-                currentPhase = RuntimeUpdatePhase.Frame;
             }
 
             if (_policy.EnableGlancing && now >= _nextGlanceTick)
@@ -623,7 +544,6 @@ public sealed class TalkyRuntime : IDisposable
             {
                 schedulerStarted = monitor?.Begin(PerformanceMetric.SchedulerOverhead, 1) ??
                                    PerformanceProfiler.NotSampled;
-                currentPhase = RuntimeUpdatePhase.Glance;
                 try
                 {
                     PruneRecentSpeakers(now);
@@ -638,13 +558,11 @@ public sealed class TalkyRuntime : IDisposable
                                 tracker.CaptureGlanceSnapshot();
                         }
                     }
-                    RecordUpdatePhaseSuccess(RuntimeUpdatePhase.Glance);
                 }
                 finally
                 {
                     monitor?.End(PerformanceMetric.SchedulerOverhead, schedulerStarted);
                 }
-                currentPhase = RuntimeUpdatePhase.Frame;
             }
 
             if (lookDue)
@@ -657,7 +575,6 @@ public sealed class TalkyRuntime : IDisposable
 
                 long lookStarted = monitor?.Begin(PerformanceMetric.LookBatch, 1) ??
                                    PerformanceProfiler.NotSampled;
-                currentPhase = RuntimeUpdatePhase.Look;
                 try
                 {
                     long glanceCandidates = 0;
@@ -696,35 +613,30 @@ public sealed class TalkyRuntime : IDisposable
                         monitor?.Count(PerformanceCounter.GlanceTicks, glanceTicks);
                     if (glanceSelections > 0)
                         monitor?.Count(PerformanceCounter.GlanceSelections, glanceSelections);
-                    RecordUpdatePhaseSuccess(RuntimeUpdatePhase.Look);
                 }
                 finally
                 {
                     monitor?.End(PerformanceMetric.LookBatch, lookStarted);
                 }
-                currentPhase = RuntimeUpdatePhase.Frame;
             }
 
-            RecordUpdatePhaseSuccess(RuntimeUpdatePhase.Frame);
         }
         catch (Exception exception)
         {
             updateFailed = true;
-            HandleUpdateFailure(exception, currentPhase);
+            HandleUpdateFailure(exception);
         }
         finally
         {
             try
             {
-                currentPhase = RuntimeUpdatePhase.Monitoring;
                 monitor?.End(PerformanceMetric.GlanceBatch, glanceStarted);
                 CompleteFrameMonitoring(monitor);
-                RecordUpdatePhaseSuccess(RuntimeUpdatePhase.Monitoring);
             }
             catch (Exception exception)
             {
                 if (!updateFailed)
-                    HandleUpdateFailure(exception, RuntimeUpdatePhase.Monitoring);
+                    HandleUpdateFailure(exception);
                 else
                     monitor?.Count(PerformanceCounter.RuntimeUpdateFailures);
             }
@@ -763,94 +675,25 @@ public sealed class TalkyRuntime : IDisposable
         }
     }
 
-    private void RecordUpdatePhaseSuccess(RuntimeUpdatePhase phase)
-    {
-        _runtimeFailureBreaker.RecordSuccess((int)phase);
-    }
-
-    private void HandleUpdateFailure(
-        Exception exception,
-        RuntimeUpdatePhase phase)
+    private void HandleUpdateFailure(Exception exception)
     {
         Type failureType = exception?.GetType() ?? typeof(Exception);
-        bool breakerActivated = _runtimeFailureBreaker.RecordFailure(
-            failureType,
-            (int)phase);
-        if (breakerActivated)
-        {
-            // Make every outbound rewrite and animation entry point fail closed before logging
-            // or best-effort cleanup can throw.
-            _animationQuarantined = true;
-            _activeLookTargets.Clear();
-            _simultaneousSpeakersCurrent = 0;
-            ObserveSimultaneousSpeakers();
-        }
-
         Plugin.Instance?.PerformanceMonitor?.Count(PerformanceCounter.RuntimeUpdateFailures);
 
+        // A persistent per-frame fault would otherwise write a stack trace 60+ times a second
+        // into the console and the log file, so report it at most once a minute with a count.
         _suppressedRuntimeFaults++;
         double nowSeconds = MonotonicSeconds();
         if (nowSeconds >= _nextRuntimeFaultDiagnosticAt)
         {
             TryLogRuntimeError(
                 "Talky runtime update failed with " + failureType.Name +
-                " in " + phase +
                 "; occurrences since the previous diagnostic=" +
-                _suppressedRuntimeFaults +
-                ". Repeated failures of this type will be quarantined.");
+                _suppressedRuntimeFaults + ".");
             _suppressedRuntimeFaults = 0;
             _nextRuntimeFaultDiagnosticAt =
                 nowSeconds + RuntimeFaultDiagnosticIntervalSeconds;
         }
-
-        if (!breakerActivated)
-            return;
-
-        Plugin.Instance?.PerformanceMonitor?.Count(PerformanceCounter.RuntimeQuarantines);
-        _pendingConsumables.Clear();
-        _pendingEmotions.Clear();
-        ClearRecentSpeakers();
-        try
-        {
-            Plugin.Instance?.Settings?.ResetPlayerState();
-            ObservePendingActionDepth();
-        }
-        catch (Exception cleanupException)
-        {
-            TryLogRuntimeError(
-                "Talky quarantine cleanup encountered " +
-                cleanupException.GetType().Name + "; animation processing remains disabled.");
-        }
-
-        int lookCleanupFailures = 0;
-        for (int i = 0; i < _lookOverrides.Count; i++)
-        {
-            LookOverride look = _lookOverrides[i];
-            if (look == null)
-                continue;
-
-            try
-            {
-                look.ClearOffsets();
-            }
-            catch (Exception)
-            {
-                lookCleanupFailures++;
-            }
-        }
-        _activeLookTargets.Clear();
-        if (lookCleanupFailures != 0)
-        {
-            TryLogRuntimeError(
-                "Talky quarantine could not clear " + lookCleanupFailures +
-                " look component(s); outbound rewriting remains disabled.");
-        }
-
-        TryLogRuntimeError(
-            "Talky animation processing was disabled after three consecutive " +
-            failureType.Name + " failures in " + phase +
-            "; base gameplay and voice remain active until " +
-            "round reset or configuration reload.");
     }
 
     private static void TryLogRuntimeError(string message)
@@ -861,7 +704,7 @@ public sealed class TalkyRuntime : IDisposable
         }
         catch
         {
-            // Logging must never strand or undo the fail-closed animation quarantine.
+            // A logging failure must never propagate out of the frame loop.
         }
     }
 
@@ -1068,7 +911,6 @@ public sealed class TalkyRuntime : IDisposable
         }
 
         _duePendingKeys.Clear();
-        ObservePendingActionDepth();
     }
 
     private void ProcessPendingEmotions(float now)
@@ -1091,50 +933,12 @@ public sealed class TalkyRuntime : IDisposable
         }
 
         _duePendingKeys.Clear();
-        ObservePendingActionDepth();
     }
 
     private void RemoveScheduledActions(uint networkId)
     {
         _pendingConsumables.Remove(networkId);
         _pendingEmotions.Remove(networkId);
-        ObservePendingActionDepth();
-    }
-
-    internal void ObservePendingActionDepth()
-    {
-        int depth = PendingActionCount;
-        if (depth > _pendingActionHighWater)
-            _pendingActionHighWater = depth;
-
-        TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.SetGauge(PerformanceCounter.PendingActionsCurrent, depth);
-        monitor?.Count(PerformanceCounter.PendingActionsSamples);
-        monitor?.ObserveHighWater(
-            PerformanceCounter.PendingActionsHighWater,
-            depth);
-    }
-
-    private void ObserveTrackerDepth()
-    {
-        TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.SetGauge(
-            PerformanceCounter.SpeechTrackersCurrent,
-            _speechTrackers.Count);
-        monitor?.SetGauge(
-            PerformanceCounter.LookTrackersCurrent,
-            _lookOverrides.Count);
-    }
-
-    private void ObserveSimultaneousSpeakers()
-    {
-        TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.SetGauge(
-            PerformanceCounter.SimultaneousSpeakersCurrent,
-            _simultaneousSpeakersCurrent);
-        monitor?.ObserveHighWater(
-            PerformanceCounter.SimultaneousSpeakersHighWater,
-            _simultaneousSpeakersCurrent);
     }
 
     private void QueuePendingEmotion(PendingEmotion pending)
@@ -1145,7 +949,6 @@ public sealed class TalkyRuntime : IDisposable
             coalesced
                 ? PerformanceCounter.PendingActionsCoalesced
                 : PerformanceCounter.PendingActionsQueued);
-        ObservePendingActionDepth();
     }
 
     private void ClearPlayers(bool destroyComponents)
@@ -1165,7 +968,6 @@ public sealed class TalkyRuntime : IDisposable
                     _speechTrackers.RemoveAt(_speechTrackers.Count - 1);
                 else
                     RemoveSpeechTracker(tracker);
-                ObserveTrackerDepth();
             }
         }
 
@@ -1180,16 +982,12 @@ public sealed class TalkyRuntime : IDisposable
                 _lookOverrides.RemoveAt(_lookOverrides.Count - 1);
             else
                 RemoveLookOverride(look);
-            ObserveTrackerDepth();
         }
 
         _speechByNetworkId.Clear();
         _lookByNetworkId.Clear();
         _recentSpeakers.Clear();
         _activeLookTargets.Clear();
-        _simultaneousSpeakersCurrent = 0;
-        ObserveTrackerDepth();
-        ObserveSimultaneousSpeakers();
     }
 
     private void ResetDeadlines(float now)

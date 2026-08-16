@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
             Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')"/>
@@ -21,6 +21,7 @@
         <OutputPath>bin\Debug\</OutputPath>
         <DefineConstants>DEBUG;TRACE</DefineConstants>
         <WarningLevel>4</WarningLevel>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
         <PlatformTarget>x64</PlatformTarget>
@@ -29,6 +30,7 @@
         <OutputPath>bin\Release\</OutputPath>
         <DefineConstants>TRACE</DefineConstants>
         <WarningLevel>4</WarningLevel>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'EXILED|x64' ">
         <PlatformTarget>x64</PlatformTarget>
@@ -37,6 +39,7 @@
         <OutputPath>bin\EXILED\</OutputPath>
         <DefineConstants>EXILED;TRACE</DefineConstants>
         <WarningLevel>4</WarningLevel>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     </PropertyGroup>
     <ItemGroup>
         <Reference Include="System"/>
@@ -44,12 +47,10 @@
     </ItemGroup>
     <ItemGroup>
         <Compile Include="Compatibility\CedModCompatibilityPolicy.cs" />
-        <Compile Include="Compatibility\CedModBinaryCompatibilityPolicy.cs" />
         <Compile Include="Compatibility\CedModRewritePolicy.cs" />
         <Compile Include="Performance\AdaptivePerformanceGovernor.cs" />
         <Compile Include="Performance\EffectivePerformancePolicy.cs" />
         <Compile Include="Performance\PerformanceConfig.cs" />
-        <Compile Include="Performance\TalkyDiagnosticsSnapshot.cs" />
         <Compile Include="Performance\PerformanceMetrics.cs" />
         <Compile Include="Performance\PerformanceProfiler.cs" />
         <Compile Include="Performance\PerformanceSummaryAccumulator.cs" />
@@ -57,13 +58,7 @@
         <Compile Include="Performance\PerformanceTransitionTracker.cs" />
         <Compile Include="Performance\RollingVoiceEnergy.cs" />
         <Compile Include="Settings\Config.cs" />
-        <Compile Include="Settings\FunctionalConfigValidator.cs" />
         <Compile Include="Settings\TranslationsConfig.cs" />
-        <Compile Include="Security\VoiceAnalysisCircuitBreaker.cs" />
-        <Compile Include="Security\ConsecutiveFailureCircuitBreaker.cs" />
-        <Compile Include="Security\VoiceFailureDiagnosticGate.cs" />
-        <Compile Include="Security\VoicePacketBoundsPolicy.cs" />
-        <Compile Include="Security\PlayerSettingAdmission.cs" />
         <Compile Include="TalkyBridge.cs" />
         <Compile Include="Voice\RollingSpeechPercentiles.cs" />
         <Compile Include="Voice\VoicePresentationState.cs" />

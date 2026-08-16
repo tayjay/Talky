@@ -9,6 +9,7 @@ using PlayerRoles.FirstPersonControl;
 using PlayerRoles.FirstPersonControl.NetworkMessages;
 using PlayerRoles.Spectating;
 using PlayerStatsSystem;
+using RelativePositioning;
 using Talky.Behaviours;
 using Talky.Compatibility;
 using Talky.Performance;
@@ -51,7 +52,6 @@ public class FakeLookHandler
     private bool _pendingPreviousCaptured;
     private bool _registered;
     private bool _directSyncRegistered;
-    public bool HasEventSubscriptions => _registered || _directSyncRegistered;
     private CedModLookSyncMode _syncMode = CedModLookSyncMode.StockSync;
 
     private TalkyRuntime Runtime => Plugin.Instance?.Runtime;
@@ -70,74 +70,70 @@ public class FakeLookHandler
     // Save the last sync data before it is changed
     private void OnPlayerValidatedVisibility(PlayerValidatedVisibilityEventArgs ev)
     {
+        // Guard first. WriteAll calls this per receiver per target per tick, so the inactive
+        // case must cost three field reads and nothing else.
+        TalkyRuntime runtime = Runtime;
+        if (_syncMode != CedModLookSyncMode.StockSync ||
+            runtime == null || !runtime.HasActiveLookTargets ||
+            ev?.Player?.ReferenceHub == null ||
+            ev.Target?.ReferenceHub == null)
+        {
+            ResetDirectSyncState();
+            return;
+        }
+
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.Count(PerformanceCounter.DirectVisibilityHooks);
         long started = monitor?.Begin(
                            PerformanceMetric.DirectVisibilitySync,
                            PerformanceMetricCatalog.SyncSampleEvery) ??
                        PerformanceProfiler.NotSampled;
-        bool captured = false;
-        TalkyRuntime runtime = Runtime;
         try
         {
-            if (_syncMode != CedModLookSyncMode.StockSync ||
-                runtime == null || !runtime.HasActiveLookTargets ||
-                ev?.Player?.ReferenceHub == null ||
-                ev.Target?.ReferenceHub == null)
+            uint receiverId = ev.Player.ReferenceHub.netId;
+            uint targetId = ev.Target.ReferenceHub.netId;
+            int frame = Time.frameCount;
+            bool newCycle =
+                !_hasVisibilitySequence ||
+                receiverId != _visibilityReceiverId ||
+                frame != _visibilityFrame;
+            if (!newCycle && !_seenVisibilityTargets.Add(targetId))
+                newCycle = true;
+
+            if (newCycle)
             {
-                ResetDirectSyncState();
-                return;
+                _hasVisibilitySequence = true;
+                _visibilityReceiverId = receiverId;
+                _visibilityFrame = frame;
+                _visibleBufferCount = 0;
+                _seenVisibilityTargets.Clear();
+                _seenVisibilityTargets.Add(targetId);
             }
 
-            long activeStarted = monitor?.Begin(
-                                     PerformanceMetric.DirectVisibilityActive,
-                                     PerformanceMetricCatalog.ActiveSyncSampleEvery) ??
-                                 PerformanceProfiler.NotSampled;
+            _pendingVisibility = ev;
+            _visibilityTargetId = targetId;
+            _pendingBufferIndex = _visibleBufferCount;
+            _pendingPreviousCaptured = false;
+
+            if (!runtime.IsLookTargetActive(_visibilityTargetId))
+                return;
+
             try
             {
-                uint receiverId = ev.Player.ReferenceHub.netId;
-                uint targetId = ev.Target.ReferenceHub.netId;
-                int frame = Time.frameCount;
-                bool newCycle =
-                    !_hasVisibilitySequence ||
-                    receiverId != _visibilityReceiverId ||
-                    frame != _visibilityFrame;
-                if (!newCycle && !_seenVisibilityTargets.Add(targetId))
-                    newCycle = true;
-
-                if (newCycle)
-                {
-                    _hasVisibilitySequence = true;
-                    _visibilityReceiverId = receiverId;
-                    _visibilityFrame = frame;
-                    _visibleBufferCount = 0;
-                    _seenVisibilityTargets.Clear();
-                    _seenVisibilityTargets.Add(targetId);
-                }
-
-                _pendingVisibility = ev;
-                _visibilityTargetId = targetId;
-                _pendingBufferIndex = _visibleBufferCount;
-                _pendingPreviousCaptured = false;
-
-                if (!runtime.IsLookTargetActive(_visibilityTargetId))
-                    return;
-
                 _directLastSyncData = FpcServerPositionDistributor.GetPrevSyncData(
                     ev.Player.ReferenceHub,
                     ev.Target.ReferenceHub);
-                _pendingPreviousCaptured = true;
-                captured = true;
+                SyncAccessProbe.Succeeded(SyncAccessSite.GetPrevSyncData);
             }
-            finally
+            catch (Exception exception)
             {
-                monitor?.End(PerformanceMetric.DirectVisibilityActive, activeStarted);
+                SyncAccessProbe.Failed(SyncAccessSite.GetPrevSyncData, exception);
+                return;
             }
+
+            _pendingPreviousCaptured = true;
         }
         finally
         {
-            if (!captured)
-                monitor?.Count(PerformanceCounter.SyncFastPathBypasses);
             monitor?.End(PerformanceMetric.DirectVisibilitySync, started);
         }
     }
@@ -146,48 +142,27 @@ public class FakeLookHandler
     // This is fired in FpcServerPositionDistributor just after the position buffer is written by FpcServerPositionDistributor.GetNewSyncData
     private RoleTypeId OnRoleSyncEvent(ReferenceHub target, ReferenceHub receiver, RoleTypeId role, NetworkWriter writer)
     {
+        TalkyRuntime runtime = Runtime;
+        if (_syncMode != CedModLookSyncMode.StockSync ||
+            runtime == null || !runtime.HasActiveLookTargets)
+        {
+            return role;
+        }
+
+        // Counted below the guard, so sync_entries reports pairs Talky examined rather than
+        // every pair the server distributes.
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.Count(PerformanceCounter.DirectRoleSyncHooks);
         monitor?.Count(PerformanceCounter.SyncEntries);
-        monitor?.Count(PerformanceCounter.LogicalSyncRecords);
         long started = monitor?.Begin(
                            PerformanceMetric.DirectRoleSync,
                            PerformanceMetricCatalog.SyncSampleEvery) ??
                        PerformanceProfiler.NotSampled;
-        bool rewritten = false;
-        TalkyRuntime runtime = Runtime;
         try
         {
-            if (_syncMode != CedModLookSyncMode.StockSync ||
-                runtime == null || !runtime.HasActiveLookTargets)
-            {
-                return role;
-            }
-
-            long activeStarted = monitor?.Begin(
-                                     PerformanceMetric.DirectRoleSyncActive,
-                                     PerformanceMetricCatalog.ActiveSyncSampleEvery) ??
-                                 PerformanceProfiler.NotSampled;
-            try
-            {
-                return ProcessRoleSyncEvent(
-                    target,
-                    receiver,
-                    role,
-                    writer,
-                    monitor,
-                    runtime,
-                    out rewritten);
-            }
-            finally
-            {
-                monitor?.End(PerformanceMetric.DirectRoleSyncActive, activeStarted);
-            }
+            return ProcessRoleSyncEvent(target, receiver, role, writer, monitor, runtime);
         }
         finally
         {
-            if (!rewritten)
-                monitor?.Count(PerformanceCounter.SyncFastPathBypasses);
             monitor?.End(PerformanceMetric.DirectRoleSync, started);
         }
     }
@@ -198,10 +173,8 @@ public class FakeLookHandler
         RoleTypeId role,
         NetworkWriter writer,
         TalkyPerformanceMonitor monitor,
-        TalkyRuntime runtime,
-        out bool rewritten)
+        TalkyRuntime runtime)
     {
-        rewritten = false;
         // ValidatedVisibility is raised immediately before the stock method optionally appends
         // this target to the shared buffer. Keep the exact event object so any later visibility
         // subscriber's change is visible here, and advance the index only for the final result.
@@ -218,7 +191,6 @@ public class FakeLookHandler
             _visibilityReceiverId != receiver.netId ||
             _visibilityTargetId != target.netId)
         {
-            monitor?.Count(PerformanceCounter.SyncCacheMismatches);
             return role;
         }
 
@@ -233,11 +205,22 @@ public class FakeLookHandler
         if (!runtime.IsLookTargetActive(target.netId))
             return role;
 
-        if (bufferIndex < 0 ||
-            bufferIndex >= FpcServerPositionDistributor._bufferPlayerIDs.Length ||
-            FpcServerPositionDistributor._bufferPlayerIDs[bufferIndex] != target.PlayerId)
+        int[] bufferPlayerIds;
+        try
         {
-            monitor?.Count(PerformanceCounter.SyncCacheMismatches);
+            bufferPlayerIds = FpcServerPositionDistributor._bufferPlayerIDs;
+            SyncAccessProbe.Succeeded(SyncAccessSite.BufferPlayerIds);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.BufferPlayerIds, exception);
+            return role;
+        }
+
+        if (bufferIndex < 0 ||
+            bufferIndex >= bufferPlayerIds.Length ||
+            bufferPlayerIds[bufferIndex] != target.PlayerId)
+        {
             return role;
         }
 
@@ -271,16 +254,26 @@ public class FakeLookHandler
         // changes, outside the WriteAll position-distribution cycle. In that path,
         // PreviouslySent isn't populated for this receiver, _directLastSyncData is stale,
         // and the buffer indices don't correspond to this (receiver, target) pair.
-        if (!FpcServerPositionDistributor.PreviouslySent.TryGetValue(receiver.netId, out var receiverPrev))
+        Dictionary<uint, Dictionary<uint, FpcSyncData>> previouslySent;
+        try
         {
-            monitor?.Count(PerformanceCounter.SyncCacheMisses);
+            previouslySent = FpcServerPositionDistributor.PreviouslySent;
+            SyncAccessProbe.Succeeded(SyncAccessSite.PreviouslySentStock);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.PreviouslySentStock, exception);
+            return role;
+        }
+
+        if (!previouslySent.TryGetValue(receiver.netId, out var receiverPrev))
+        {
             return role;
         }
         
         if(!receiverPrev.TryGetValue(target.netId, out var _))
         {
             // The stock distributor should already have cached this pair before RoleSyncEvent.
-            monitor?.Count(PerformanceCounter.SyncCacheMisses);
             return role;
         }
 
@@ -288,42 +281,44 @@ public class FakeLookHandler
         Vector2 lookOffset = tracker.NextLookOffset;
         if (!IsFinite(lookOffset))
         {
-            monitor?.Count(PerformanceCounter.SyncNonFiniteOffsets);
             return role;
         }
 
         // Validate every input before mutating the stock cache or movement module.
-        long rewriteStarted = monitor?.Begin(
-                                  PerformanceMetric.DirectRoleSyncRewrite,
-                                  PerformanceMetricCatalog.ActiveSyncSampleEvery) ??
-                              PerformanceProfiler.NotSampled;
         float originalHorizontal = fpmm.MouseLook.CurrentHorizontal;
         float originalVertical = fpmm.MouseLook.CurrentVertical;
         FpcSyncData newSyncData;
         try
         {
-            try
-            {
-                receiverPrev[target.netId] = _directLastSyncData;
-                fpmm.MouseLook.CurrentHorizontal = originalHorizontal + lookOffset.x;
-                fpmm.MouseLook.CurrentVertical = originalVertical + lookOffset.y;
-                newSyncData = FpcServerPositionDistributor.GetNewSyncData(receiver, target, fpmm, false);
-            }
-            finally
-            {
-                fpmm.MouseLook.CurrentHorizontal = originalHorizontal;
-                fpmm.MouseLook.CurrentVertical = originalVertical;
-            }
-
-            FpcServerPositionDistributor._bufferSyncData[bufferIndex] = newSyncData;
-            monitor?.Count(PerformanceCounter.Rewrites);
-            monitor?.Count(PerformanceCounter.LogicalSyncRewrites);
-            rewritten = true;
+            receiverPrev[target.netId] = _directLastSyncData;
+            fpmm.MouseLook.CurrentHorizontal = originalHorizontal + lookOffset.x;
+            fpmm.MouseLook.CurrentVertical = originalVertical + lookOffset.y;
+            newSyncData = FpcServerPositionDistributor.GetNewSyncData(receiver, target, fpmm, false);
+            SyncAccessProbe.Succeeded(SyncAccessSite.GetNewSyncData);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.GetNewSyncData, exception);
+            return role;
         }
         finally
         {
-            monitor?.End(PerformanceMetric.DirectRoleSyncRewrite, rewriteStarted);
+            fpmm.MouseLook.CurrentHorizontal = originalHorizontal;
+            fpmm.MouseLook.CurrentVertical = originalVertical;
         }
+
+        try
+        {
+            FpcServerPositionDistributor._bufferSyncData[bufferIndex] = newSyncData;
+            SyncAccessProbe.Succeeded(SyncAccessSite.BufferSyncDataWrite);
+        }
+        catch (Exception exception)
+        {
+            SyncAccessProbe.Failed(SyncAccessSite.BufferSyncDataWrite, exception);
+            return role;
+        }
+
+        monitor?.Count(PerformanceCounter.Rewrites);
         return role;
     }
 
@@ -334,76 +329,67 @@ public class FakeLookHandler
         bool isInvisible,
         bool nearPositioning)
     {
+        TalkyRuntime runtime = Runtime;
+        if (_syncMode != CedModLookSyncMode.CedModFakeSync ||
+            runtime == null || !runtime.HasActiveLookTargets ||
+            receiver == null || target == null || fpmm == null)
+        {
+            return default;
+        }
+
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.Count(PerformanceCounter.CedModPrefixHooks);
         monitor?.Count(PerformanceCounter.SyncEntries);
-        monitor?.Count(PerformanceCounter.LogicalSyncRecords);
         long started = monitor?.Begin(
                            PerformanceMetric.CedModRoleSync,
                            PerformanceMetricCatalog.SyncSampleEvery) ??
                        PerformanceProfiler.NotSampled;
-        bool armed = false;
         try
         {
-            TalkyRuntime runtime = Runtime;
-            if (_syncMode != CedModLookSyncMode.CedModFakeSync ||
-                runtime == null || !runtime.HasActiveLookTargets ||
-                receiver == null || target == null || fpmm == null)
+            bool targetActive = runtime.IsLookTargetActive(target.netId);
+            if (targetActive)
+                monitor?.Count(PerformanceCounter.ActiveTargetHits);
+
+            bool targetEligible =
+                targetActive &&
+                !isInvisible &&
+                !nearPositioning &&
+                target != receiver;
+            if (targetEligible && target.IsSpectatedBy(receiver) &&
+                monitor?.CurrentPolicy?.SpectatorHeadMovementsEnabled != true)
             {
-                return default;
+                targetEligible = false;
             }
 
-            long activeStarted = monitor?.Begin(
-                                     PerformanceMetric.CedModRoleSyncActive,
-                                     PerformanceMetricCatalog.ActiveSyncSampleEvery) ??
-                                 PerformanceProfiler.NotSampled;
-            try
+            if (targetEligible &&
+                (target.roleManager.CurrentRole is not IFpcRole currentRole ||
+                 !ReferenceEquals(currentRole.FpcModule, fpmm)))
             {
-                bool targetActive = runtime.IsLookTargetActive(target.netId);
-                if (targetActive)
-                    monitor?.Count(PerformanceCounter.ActiveTargetHits);
+                targetEligible = false;
+            }
 
-                bool targetEligible =
-                    targetActive &&
-                    !isInvisible &&
-                    !nearPositioning &&
-                    target != receiver;
-                if (targetEligible && target.IsSpectatedBy(receiver) &&
-                    monitor?.CurrentPolicy?.SpectatorHeadMovementsEnabled != true)
+            Vector2 lookOffset = default;
+            if (targetEligible)
+            {
+                if (!runtime.TryGetLookOverride(target.netId, out LookOverride tracker) ||
+                    tracker == null ||
+                    (tracker.NextLookOffset == Vector2.zero &&
+                     tracker.LastLookOffset == Vector2.zero))
                 {
                     targetEligible = false;
                 }
-
-                if (targetEligible &&
-                    (target.roleManager.CurrentRole is not IFpcRole currentRole ||
-                     !ReferenceEquals(currentRole.FpcModule, fpmm)))
+                else
                 {
-                    targetEligible = false;
+                    lookOffset = tracker.NextLookOffset;
                 }
+            }
 
-                Vector2 lookOffset = default;
-                if (targetEligible)
-                {
-                    if (!runtime.TryGetLookOverride(target.netId, out LookOverride tracker) ||
-                        tracker == null ||
-                        (tracker.NextLookOffset == Vector2.zero &&
-                         tracker.LastLookOffset == Vector2.zero))
-                    {
-                        targetEligible = false;
-                    }
-                    else
-                    {
-                        lookOffset = tracker.NextLookOffset;
-                    }
-                }
+            bool offsetFinite = IsFinite(lookOffset);
 
-                bool offsetFinite = IsFinite(lookOffset);
-                if (targetEligible && !offsetFinite)
-                    monitor?.Count(PerformanceCounter.SyncNonFiniteOffsets);
-
-                bool hasPrevious = false;
-                FpcSyncData previous = default;
-                if (targetEligible && offsetFinite)
+            bool hasPrevious = false;
+            FpcSyncData previous = default;
+            if (targetEligible && offsetFinite)
+            {
+                try
                 {
                     if (FpcServerPositionDistributor.PreviouslySent.TryGetValue(
                             receiver.netId,
@@ -412,34 +398,31 @@ public class FakeLookHandler
                         hasPrevious = receiverPrevious.TryGetValue(target.netId, out previous);
                     }
 
-                    if (!hasPrevious)
-                        monitor?.Count(PerformanceCounter.SyncCacheMisses);
+                    SyncAccessProbe.Succeeded(SyncAccessSite.PreviouslySentCedModPrefix);
                 }
+                catch (Exception exception)
+                {
+                    SyncAccessProbe.Failed(SyncAccessSite.PreviouslySentCedModPrefix, exception);
+                    hasPrevious = false;
+                }
+            }
 
-                CedModRewriteState<FpcSyncData, Vector2> rewrite =
-                    CedModRewriteState<FpcSyncData, Vector2>.Capture(
-                        targetActive,
-                        isInvisible,
-                        nearPositioning,
-                        targetEligible,
-                        offsetFinite,
-                        hasPrevious,
-                        previous,
-                        lookOffset);
-                armed = rewrite.IsArmed;
-                return armed
-                    ? new CedModSyncPatchState(rewrite, receiver, target, fpmm)
-                    : default;
-            }
-            finally
-            {
-                monitor?.End(PerformanceMetric.CedModRoleSyncActive, activeStarted);
-            }
+            CedModRewriteState<FpcSyncData, Vector2> rewrite =
+                CedModRewriteState<FpcSyncData, Vector2>.Capture(
+                    targetActive,
+                    isInvisible,
+                    nearPositioning,
+                    targetEligible,
+                    offsetFinite,
+                    hasPrevious,
+                    previous,
+                    lookOffset);
+            return rewrite.IsArmed
+                ? new CedModSyncPatchState(rewrite, receiver, target, fpmm)
+                : default;
         }
         finally
         {
-            if (!armed)
-                monitor?.Count(PerformanceCounter.SyncFastPathBypasses);
             // Only Talky's prefix work is charged. CedMod's helper runs after this
             // returns and must not be attributed to Talky's adaptive budget.
             monitor?.End(PerformanceMetric.CedModRoleSync, started);
@@ -456,36 +439,33 @@ public class FakeLookHandler
         CedModSyncPatchState state,
         ref FpcSyncData original)
     {
+        // Guard before instrumentation: CedMod calls this per receiver per target per tick.
+        bool stateReferencesMatch =
+            receiver != null &&
+            target != null &&
+            fpmm != null &&
+            ReferenceEquals(receiver, state.Receiver) &&
+            ReferenceEquals(target, state.Target) &&
+            ReferenceEquals(fpmm, state.Movement);
+        if (_syncMode != CedModLookSyncMode.CedModFakeSync ||
+            !runOriginal || !state.Rewrite.IsArmed ||
+            !stateReferencesMatch ||
+            isInvisible || nearPositioning)
+        {
+            return;
+        }
+
+        TalkyRuntime runtime = Runtime;
+        if (runtime == null || !runtime.HasActiveLookTargets)
+            return;
+
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        monitor?.Count(PerformanceCounter.CedModPostfixHooks);
         long started = monitor?.Begin(
                            PerformanceMetric.CedModPostfix,
                            PerformanceMetricCatalog.SyncSampleEvery) ??
                        PerformanceProfiler.NotSampled;
-        bool rewrittenRecord = false;
         try
         {
-            bool stateReferencesMatch =
-                receiver != null &&
-                target != null &&
-                fpmm != null &&
-                ReferenceEquals(receiver, state.Receiver) &&
-                ReferenceEquals(target, state.Target) &&
-                ReferenceEquals(fpmm, state.Movement);
-            if (_syncMode != CedModLookSyncMode.CedModFakeSync ||
-                !runOriginal || !state.Rewrite.IsArmed ||
-                !stateReferencesMatch ||
-                isInvisible || nearPositioning)
-            {
-                if (state.Rewrite.IsArmed && !stateReferencesMatch)
-                    monitor?.Count(PerformanceCounter.SyncCacheMismatches);
-                return;
-            }
-
-            TalkyRuntime runtime = Runtime;
-            if (runtime == null || !runtime.HasActiveLookTargets)
-                return;
-
             if (!runtime.IsLookTargetActive(target.netId) || target == receiver)
                 return;
 
@@ -502,16 +482,21 @@ public class FakeLookHandler
             }
 
             if (!IsFinite(state.Rewrite.Offset))
-            {
-                monitor?.Count(PerformanceCounter.SyncNonFiniteOffsets);
                 return;
-            }
 
-            if (!FpcServerPositionDistributor.PreviouslySent.TryGetValue(
-                    receiver.netId,
-                    out var receiverPrevious))
+            Dictionary<uint, FpcSyncData> receiverPrevious;
+            try
             {
-                monitor?.Count(PerformanceCounter.SyncCacheMisses);
+                bool found = FpcServerPositionDistributor.PreviouslySent.TryGetValue(
+                    receiver.netId,
+                    out receiverPrevious);
+                SyncAccessProbe.Succeeded(SyncAccessSite.PreviouslySentCedModPostfix);
+                if (!found)
+                    return;
+            }
+            catch (Exception exception)
+            {
+                SyncAccessProbe.Failed(SyncAccessSite.PreviouslySentCedModPostfix, exception);
                 return;
             }
 
@@ -520,58 +505,59 @@ public class FakeLookHandler
                 // The prefix armed only after finding this pair and CedMod's original helper is
                 // expected to cache it again before the postfix. Its disappearance means the
                 // captured state no longer describes the cache being committed.
-                monitor?.Count(PerformanceCounter.SyncCacheMismatches);
                 return;
             }
 
-            long rewriteStarted = monitor?.Begin(
-                                      PerformanceMetric.CedModPostfixRewrite,
-                                      PerformanceMetricCatalog.ActiveSyncSampleEvery) ??
-                                  PerformanceProfiler.NotSampled;
             Vector2 lookOffset = state.Rewrite.Offset;
             float originalHorizontal = fpmm.MouseLook.CurrentHorizontal;
             float originalVertical = fpmm.MouseLook.CurrentVertical;
+
+            PlayerMovementState movementState;
+            bool bitCustom;
+            RelativePosition position;
             try
             {
-                FpcSyncData rewritten;
-                try
-                {
-                    fpmm.MouseLook.CurrentHorizontal = originalHorizontal + lookOffset.x;
-                    fpmm.MouseLook.CurrentVertical = originalVertical + lookOffset.y;
-                    rewritten = new FpcSyncData(
-                        state.Rewrite.Previous,
-                        original._state,
-                        original._bitCustom,
-                        original._position,
-                        fpmm.MouseLook);
-                }
-                finally
-                {
-                    fpmm.MouseLook.CurrentHorizontal = originalHorizontal;
-                    fpmm.MouseLook.CurrentVertical = originalVertical;
-                }
+                movementState = original._state;
+                bitCustom = original._bitCustom;
+                position = original._position;
+                SyncAccessProbe.Succeeded(SyncAccessSite.FpcSyncDataCarriedFields);
+            }
+            catch (Exception exception)
+            {
+                SyncAccessProbe.Failed(SyncAccessSite.FpcSyncDataCarriedFields, exception);
+                return;
+            }
 
-                CedModRewriteCommit<FpcSyncData> commit =
-                    CedModRewriteCommit<FpcSyncData>.Rewrite(rewritten);
-
-                // CedMod caches its original record before returning. Update that cache first,
-                // then return the exact same record so the next delta is based on what this
-                // receiver actually observed.
-                receiverPrevious[target.netId] = commit.CacheValue;
-                original = commit.Outgoing;
-                monitor?.Count(PerformanceCounter.Rewrites);
-                monitor?.Count(PerformanceCounter.LogicalSyncRewrites);
-                rewrittenRecord = true;
+            FpcSyncData rewritten;
+            try
+            {
+                fpmm.MouseLook.CurrentHorizontal = originalHorizontal + lookOffset.x;
+                fpmm.MouseLook.CurrentVertical = originalVertical + lookOffset.y;
+                rewritten = new FpcSyncData(
+                    state.Rewrite.Previous,
+                    movementState,
+                    bitCustom,
+                    position,
+                    fpmm.MouseLook);
             }
             finally
             {
-                monitor?.End(PerformanceMetric.CedModPostfixRewrite, rewriteStarted);
+                fpmm.MouseLook.CurrentHorizontal = originalHorizontal;
+                fpmm.MouseLook.CurrentVertical = originalVertical;
             }
+
+            CedModRewriteCommit<FpcSyncData> commit =
+                CedModRewriteCommit<FpcSyncData>.Rewrite(rewritten);
+
+            // CedMod caches its original record before returning. Update that cache first,
+            // then return the exact same record so the next delta is based on what this
+            // receiver actually observed.
+            receiverPrevious[target.netId] = commit.CacheValue;
+            original = commit.Outgoing;
+            monitor?.Count(PerformanceCounter.Rewrites);
         }
         finally
         {
-            if (!rewrittenRecord)
-                monitor?.Count(PerformanceCounter.SyncFastPathBypasses);
             monitor?.End(PerformanceMetric.CedModPostfix, started);
         }
     }
@@ -658,8 +644,7 @@ public class FakeLookHandler
 
     private static bool AnimationEventsEnabled()
     {
-        TalkyRuntime runtime = Plugin.Instance?.Runtime;
-        return runtime?.IsEnabled == true && !runtime.IsAnimationQuarantined;
+        return Plugin.Instance?.Runtime?.IsEnabled == true;
     }
 
     public void ConfigureSyncMode(CedModLookSyncMode mode)
@@ -676,7 +661,8 @@ public class FakeLookHandler
             return;
 
         _registered = true;
-        
+        SyncAccessProbe.Reset();
+
         LabApi.Events.Handlers.PlayerEvents.ShotWeapon += OnShoot;
         LabApi.Events.Handlers.PlayerEvents.AimedWeapon += ToggleAds;
         LabApi.Events.Handlers.PlayerEvents.UsingItem += OnStartUsingItem;
@@ -731,6 +717,7 @@ public class FakeLookHandler
         LabApi.Events.Handlers.PlayerEvents.Hurt -= OnHurt;
         ResetDirectSyncState();
         _registered = false;
+        SyncAccessProbe.LogSummary();
     }
 
     private void ResetDirectSyncState()

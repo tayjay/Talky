@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Talky.Performance;
 using Talky.Settings;
@@ -18,9 +18,6 @@ internal static class Program
             TestRollingVoiceEnergy();
             _assertions += RollingSpeechPercentilesTests.Run();
             _assertions += CedModCompatibilityTests.Run();
-            _assertions += VoiceSecurityPolicyTests.Run();
-            _assertions += HardeningPolicyTests.Run();
-            _assertions += TalkyDiagnosticsSnapshotTests.Run();
             TestVoicePresentationState();
             TestConfigurationAndPolicy();
             TestRecentSpeakerExpiry();
@@ -165,7 +162,7 @@ internal static class Program
         Equal(10, defaults.EconomyGlanceHz, "Default economy glance rate");
         Equal(30, defaults.EconomyLookHz, "Default economy look rate");
         Equal(15, defaults.MinimumFaceHz, "Default minimum face rate");
-        Equal(0, defaults.SummaryLogIntervalSeconds, "Default summary interval is opt-in");
+        Equal(300, defaults.SummaryLogIntervalSeconds, "Default summary interval");
 
         PerformanceConfig invalid = new PerformanceConfig
         {
@@ -925,15 +922,13 @@ internal static class Program
         {
             true, false, false, true, true, false,
             true, true, true, true, false, false,
-            true, false, false, false, false, false,
-            true, false, false, false, false,
+            true,
         };
         int[] sampleEvery =
         {
             8, 8, 8, 1, 1, 1,
             64, 64, 64, 1, 1, 1,
-            64, 8, 8, 8, 8, 8,
-            8, 8, 1, 1, 1,
+            64,
         };
         PerformanceSubsystem[] subsystem =
         {
@@ -950,16 +945,6 @@ internal static class Program
             PerformanceSubsystem.Monitoring, // Governor
             PerformanceSubsystem.Monitoring, // ProfilerOverhead
             PerformanceSubsystem.Sync,       // DirectVisibilitySync
-            PerformanceSubsystem.None,       // DirectVisibilityActive
-            PerformanceSubsystem.None,       // DirectRoleSyncActive
-            PerformanceSubsystem.None,       // DirectRoleSyncRewrite
-            PerformanceSubsystem.None,       // CedModRoleSyncActive
-            PerformanceSubsystem.None,       // CedModPostfixRewrite
-            PerformanceSubsystem.Scheduler,  // SettingsResponse
-            PerformanceSubsystem.None,       // AnimationRpc
-            PerformanceSubsystem.None,       // PendingActionDrain
-            PerformanceSubsystem.None,       // Lifecycle
-            PerformanceSubsystem.None,       // ConfigReload
         };
 
         for (int index = 0; index < (int)PerformanceMetric.Count; index++)
@@ -995,7 +980,7 @@ internal static class Program
         Near(1d, breakdown.VoiceMilliseconds, 0d, "Summary voice excludes nested decode");
         Near(4d, breakdown.FaceMilliseconds, 0d, "Summary face group");
         Near(5d, breakdown.LookMilliseconds, 0d, "Summary look excludes nested glance");
-        Near(29d, breakdown.SchedulerMilliseconds, 0d, "Summary scheduler group includes settings");
+        Near(10d, breakdown.SchedulerMilliseconds, 0d, "Summary scheduler group");
         Near(37d, breakdown.SyncMilliseconds, 0d, "Summary combines all sync paths");
         Near(23d, breakdown.MonitoringMilliseconds, 0d, "Summary combines monitor overhead");
 
@@ -1008,9 +993,9 @@ internal static class Program
         Near(100d, summary.StartedAt, 0d, "Summary start time");
         Equal(1L, summary.WindowCount, "Summary window count");
         Equal(2L, summary.FrameCount, "Summary frame count");
-        Near(76d, summary.TotalTalkyMilliseconds, 0d, "Summary budget total");
-        Near(38d, summary.TalkyMillisecondsPerFrame, 0d, "Summary Talky per frame");
-        Near(38d, summary.TalkyMillisecondsPerSecond, 0d, "Summary Talky per second");
+        Near(57d, summary.TotalTalkyMilliseconds, 0d, "Summary budget total");
+        Near(28.5d, summary.TalkyMillisecondsPerFrame, 0d, "Summary Talky per frame");
+        Near(28.5d, summary.TalkyMillisecondsPerSecond, 0d, "Summary Talky per second");
         Near(15d, summary.AveragePlayers, 0d, "Summary average players");
         Near(3d, summary.AverageRecentSpeakers, 0d, "Summary average speakers");
         Near(4d, summary.AverageActiveLooks, 0d, "Summary average active looks");
@@ -1022,7 +1007,7 @@ internal static class Program
             0d,
             "Summary sync per frame");
         Near(
-            100d / 76d,
+            100d / 57d,
             summary.GetSubsystemShare(PerformanceSubsystem.Voice),
             1e-9d,
             "Summary subsystem share");
@@ -1044,7 +1029,7 @@ internal static class Program
             message.Contains("observed_tier_span=Full->Economy, policy_changes=1"),
             "Summary message identifies mixed-tier evidence");
         True(
-            message.Contains($"voice={0.5d:F3} ({100d / 76d:F1}%)"),
+            message.Contains($"voice={0.5d:F3} ({100d / 57d:F1}%)"),
             "Summary message voice field");
         True(
             message.Contains($"frame_monitor_lower_bound={11.5d:F3} ms/frame"),
