@@ -155,7 +155,7 @@ internal static class HarmonyRuntimeBridge
         nameof(Postfix),
         BindingFlags.Static | BindingFlags.NonPublic);
 
-    private static HarmonyLib.Harmony _harmony;
+    private static object _harmony; //HarmonyLib.Harmony
     private static MethodInfo _target;
     private static bool _patched;
     private static int _callbackFailureLogged;
@@ -264,8 +264,17 @@ internal static class HarmonyRuntimeBridge
             }
 
             HarmonyLib.Patches writeAllPatches = HarmonyLib.Harmony.GetPatchInfo(writeAll);
-            HarmonyLib.Patch sentinalPatch = writeAllPatches?.Prefixes.FirstOrDefault(patch =>
-                Equals(patch.PatchMethod, sentinalPrefix));
+            HarmonyLib.Patch sentinalPatch = null;
+            if (writeAllPatches?.Prefixes != null)
+                foreach (var patch in (writeAllPatches?.Prefixes))
+                {
+                    if (Equals(patch.PatchMethod, sentinalPrefix))
+                    {
+                        sentinalPatch = patch;
+                        break;
+                    }
+                }
+
             if (sentinalPatch == null)
             {
                 RemovePatchesInternal();
@@ -289,7 +298,7 @@ internal static class HarmonyRuntimeBridge
             _target = target;
 
             // Remove stale owner-scoped patches before applying the current methods.
-            _harmony.Unpatch(target, HarmonyLib.HarmonyPatchType.All, OwnerId);
+            ((HarmonyLib.Harmony)_harmony).Unpatch(target, HarmonyLib.HarmonyPatchType.All, OwnerId);
 
             HarmonyLib.HarmonyMethod prefix = new HarmonyLib.HarmonyMethod(PrefixMethod)
             {
@@ -299,11 +308,11 @@ internal static class HarmonyRuntimeBridge
             {
                 priority = HarmonyLib.Priority.Last,
             };
-            _harmony.Patch(target, prefix, postfix);
+            ((HarmonyLib.Harmony)_harmony).Patch(target, prefix, postfix);
 
             if (!VerifyPatch(target))
             {
-                _harmony.Unpatch(target, HarmonyLib.HarmonyPatchType.All, OwnerId);
+                ((HarmonyLib.Harmony)_harmony).Unpatch(target, HarmonyLib.HarmonyPatchType.All, OwnerId);
                 ClearPatchState();
                 detail = DescribePatch(target, sentinalOwner, false);
                 return false;
@@ -369,7 +378,7 @@ internal static class HarmonyRuntimeBridge
 
     private static void RemovePatchesInternal()
     {
-        HarmonyLib.Harmony harmony = _harmony ?? new HarmonyLib.Harmony(OwnerId);
+        HarmonyLib.Harmony harmony = ((HarmonyLib.Harmony)_harmony) ?? new HarmonyLib.Harmony(OwnerId);
         if (_target != null)
         {
             harmony.Unpatch(
@@ -425,7 +434,7 @@ internal static class HarmonyRuntimeBridge
 
         try
         {
-            (_harmony ?? new HarmonyLib.Harmony(OwnerId)).Unpatch(
+            (((HarmonyLib.Harmony)_harmony) ?? new HarmonyLib.Harmony(OwnerId)).Unpatch(
                 target,
                 HarmonyLib.HarmonyPatchType.All,
                 OwnerId);
@@ -441,11 +450,29 @@ internal static class HarmonyRuntimeBridge
     private static bool VerifyPatch(MethodInfo target)
     {
         HarmonyLib.Patches patches = HarmonyLib.Harmony.GetPatchInfo(target);
+        bool any = false;
+        foreach (var patch in patches.Prefixes)
+        {
+            if (patch.owner == OwnerId && Equals(patch.PatchMethod, PrefixMethod))
+            {
+                any = true;
+                break;
+            }
+        }
+
+        bool any1 = false;
+        foreach (var patch in patches.Postfixes)
+        {
+            if (patch.owner == OwnerId && Equals(patch.PatchMethod, PostfixMethod))
+            {
+                any1 = true;
+                break;
+            }
+        }
+
         return patches != null &&
-               patches.Prefixes.Any(patch =>
-                   patch.owner == OwnerId && Equals(patch.PatchMethod, PrefixMethod)) &&
-               patches.Postfixes.Any(patch =>
-                   patch.owner == OwnerId && Equals(patch.PatchMethod, PostfixMethod));
+               any &&
+               any1;
     }
 
     private static string ExpectedSignature() =>
