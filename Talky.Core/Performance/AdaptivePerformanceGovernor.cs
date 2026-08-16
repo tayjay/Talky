@@ -83,8 +83,7 @@ public readonly struct GovernorDecision
 }
 
 /// <summary>
-/// Pure adaptive-quality state machine. Time is supplied by the caller, making transitions
-/// deterministic and independent of Unity or wall-clock APIs.
+/// Runs adaptive quality transitions from caller-supplied time.
 /// </summary>
 public sealed class AdaptivePerformanceGovernor
 {
@@ -290,7 +289,7 @@ public sealed class AdaptivePerformanceGovernor
     }
 
     /// <summary>
-    /// Starts a fresh warmup and discards window evidence while deliberately preserving the tier.
+    /// Resets round evidence while preserving the current tier.
     /// </summary>
     public void ResetForRound(double nowSeconds)
     {

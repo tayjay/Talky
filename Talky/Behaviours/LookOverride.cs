@@ -9,7 +9,7 @@ using UnityEngine;
 namespace Talky.Behaviours;
 
 /// <summary>
-/// Holds look offsets for one player. The shared runtime owns all ticking.
+/// Stores head-look state for one player; the shared runtime owns ticking.
 /// </summary>
 public sealed class LookOverride : MonoBehaviour
 {
@@ -82,8 +82,7 @@ public sealed class LookOverride : MonoBehaviour
     }
 
     /// <summary>
-    /// Advances this player's head state. The caller supplies the already-pruned recent-speaker
-    /// list so glance selection is O(players * active speakers), not O(players squared).
+    /// Advances head state using the caller's pruned recent-speaker list.
     /// </summary>
     public int TickLook(
         float now,
@@ -148,8 +147,7 @@ public sealed class LookOverride : MonoBehaviour
             goal,
             Mathf.Clamp01(Mathf.Max(0f, deltaTime) * 7f));
 
-        // Lerp approaches zero asymptotically. Snap a fully idle look to zero so the
-        // active-target registry can remove it and the pairwise sync path can truly bypass.
+        // Snap idle offsets to zero so inactive targets can be removed.
         if (goal == Vector2.zero && NextLookOffset.sqrMagnitude <= 0.0001f)
         {
             LastLookOffset = Vector2.zero;
@@ -197,8 +195,7 @@ public sealed class LookOverride : MonoBehaviour
         if (_disposed)
             return;
 
-        // Make stale callbacks inert first and avoid notifying a runtime which may itself be in
-        // teardown. The runtime drops its active-target ownership separately.
+        // Mark disposed before teardown so stale callbacks are inert.
         _disposed = true;
         try
         {

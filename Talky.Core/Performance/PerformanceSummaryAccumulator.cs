@@ -4,8 +4,7 @@ using System.Runtime.CompilerServices;
 namespace Talky.Performance;
 
 /// <summary>
-/// Reusable accumulator for periodic performance reports.
-/// Window and population updates allocate nothing; formatting occurs only on the cold log path.
+/// Accumulates periodic report data without allocating until formatting.
 /// </summary>
 public sealed class PerformanceSummaryAccumulator
 {
@@ -193,7 +192,7 @@ public sealed class PerformanceSummaryAccumulator
             policyChanges++;
 
         return
-            $"Talky performance summary: mode={mode}, " +
+            $"Performance summary: mode={mode}, " +
             $"configured_tier={configuredTier}, effective_tier={effectiveTier}, " +
             $"committed_tier={committedTier}, " +
             $"recovery_probe={(recoveryProbeActive ? "active" : "none")}, " +
@@ -229,8 +228,7 @@ public sealed class PerformanceSummaryAccumulator
             $"active_target_hits={GetCounter(PerformanceCounter.ActiveTargetHits)}, " +
             $"rewrites={GetCounter(PerformanceCounter.Rewrites)}, " +
             $"emotion_writes={GetCounter(PerformanceCounter.EmotionWrites)}, " +
-            // Voice pipeline attrition. voice_packets counts inbound packets, so a decode
-            // stall is invisible without the success/failure split beside it.
+            // Packet and decode counters expose voice-pipeline attrition.
             $"voice_bytes={GetCounter(PerformanceCounter.VoiceBytes)}, " +
             $"decode_ok={GetCounter(PerformanceCounter.VoiceDecodeSuccesses)}, " +
             $"decode_failed={GetCounter(PerformanceCounter.VoiceDecodeFailures)}, " +

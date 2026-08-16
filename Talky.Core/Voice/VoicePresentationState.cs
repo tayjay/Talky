@@ -1,8 +1,7 @@
 namespace Talky.Voice;
 
 /// <summary>
-/// Stores the decoded signal snapshot used to animate one visual player.
-/// Decoder and rolling-energy ownership remain with the transmitting player.
+/// Stores animation signal state while decoding remains owned by the transmitting player.
 /// </summary>
 public sealed class VoicePresentationState
 {

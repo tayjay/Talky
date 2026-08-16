@@ -13,8 +13,7 @@ using PerformanceCounter = Talky.Performance.PerformanceCounter;
 namespace Talky.Behaviours;
 
 /// <summary>
-/// Holds the voice-animation state for one player. The shared <see cref="Talky.Runtime.TalkyRuntime"/>
-/// ticks this component; it deliberately has no Unity Update method.
+/// Stores voice-animation state for one player; the shared runtime owns ticking.
 /// </summary>
 public sealed class SpeechTracker : MonoBehaviour
 {
@@ -121,7 +120,8 @@ public sealed class SpeechTracker : MonoBehaviour
 
             try
             {
-                _decoder = Player.VoiceModule?.Decoder; //Publicized Assembly-CSharp makes this accessible when "Allow Unsafe Code" is enabled.
+                // Access relies on the publicized Assembly-CSharp reference and unsafe compilation.
+                _decoder = Player.VoiceModule?.Decoder;
             }
             catch (Exception exception)
             {
@@ -185,7 +185,7 @@ public sealed class SpeechTracker : MonoBehaviour
     }
 
     /// <summary>
-    /// Called by the central runtime at the currently effective face cadence.
+    /// Advances face state at the runtime-selected cadence.
     /// </summary>
     public void TickSpeech(float now)
     {
@@ -285,7 +285,7 @@ public sealed class SpeechTracker : MonoBehaviour
     }
 
     /// <summary>
-    /// Compatibility entry point. Normal voice traffic enters through <see cref="Talky.Runtime.TalkyRuntime"/>.
+    /// Forwards externally supplied voice data through the shared runtime.
     /// </summary>
     public void VoiceMessageReceived(byte[] data, int length)
     {
@@ -303,10 +303,7 @@ public sealed class SpeechTracker : MonoBehaviour
 
     internal int DecodeVoicePacket(byte[] data, int length, float now)
     {
-        // All three buffer terms are load-bearing and none is redundant: this data is pinned and
-        // handed to native Opus, which dereferences the pointer and reads `length` bytes without
-        // rechecking either. A null buffer, a non-positive length, or a length past the end of
-        // the array is a native fault, not a catchable managed exception.
+        // Opus reads the pinned buffer natively, so validate bounds before crossing the native boundary.
         if (_disposed || _player == null || _player.IsDestroyed ||
             data == null || length <= 0 || length > data.Length)
             return 0;
@@ -361,15 +358,14 @@ public sealed class SpeechTracker : MonoBehaviour
         {
             monitor?.Count(PerformanceCounter.VoiceDecodeFailures);
             RecordDecodeFailure(now);
-            // Gated: this catch is per-packet, so the message must not be built when Debug is off.
+            // Avoid building per-packet diagnostics when debug logging is disabled.
             if (Plugin.Instance?.Config?.Debug == true)
-                Logger.Debug("Talky voice decode failed: " + exception, true);
+                Logger.Debug("Voice decode failed: " + exception, true);
             return 0;
         }
     }
 
-    // A stuck decoder fails continuously, so a plain consecutive count catches it. Backing off
-    // stops a broken stream from paying for a failed native call on every inbound packet.
+    // Back off after repeated decoder failures instead of retrying every packet.
     private void RecordDecodeFailure(float now)
     {
         if (++_decodeFailures < DecodeFailureThreshold)
@@ -459,9 +455,7 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_disposed)
             return;
 
-        // Become inert before resetting so a failed teardown cannot leave this tracker registered.
-        // The reset still restores the default face: Dispose runs against live players on plugin
-        // disable and round restart, and skipping it freezes every face mid-expression.
+        // Mark disposed before restoring the default face for live players.
         _disposed = true;
         try
         {
@@ -469,8 +463,7 @@ public sealed class SpeechTracker : MonoBehaviour
         }
         catch (Exception exception)
         {
-            // Releasing Talky's ownership matters more than the final Player.Emotion write, which
-            // can fail during a role transition or destroyed-player cleanup.
+            // Continue releasing ownership if the final emotion reset fails.
             Logger.Debug(exception, Plugin.Instance?.Config?.Debug == true);
         }
         finally

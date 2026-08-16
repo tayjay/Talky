@@ -73,7 +73,7 @@ Both configurations produce **`Talky.dll`**. They differ by destination, not fil
 Success marker, identical in both cases:
 
 ```
-[INFO] [Talky] Talky was enabled.
+[INFO] [Talky] Was enabled.
 ```
 
 ### 1. Build Release and deploy to LabAPI
@@ -94,7 +94,7 @@ Expected, in order:
 
 ```
 [LabApi] [LOADER] Successfully loaded Talky
-[Talky] Talky was enabled.
+[Talky] Was enabled.
 [LabApi] [LOADER] Successfully enabled 'Talky', Version: 1.0.0.0, Author: 'TayTay'
 ```
 
@@ -128,7 +128,7 @@ Expected:
 
 ```
 [Talky] Loaded plugin Talky@1.0.0.0
-[Talky] Talky was enabled.
+[Talky] Was enabled.
 [Exiled.API] Talky v1.0.0 by TayTay has been enabled!
 ```
 

@@ -18,9 +18,7 @@ internal static class HarmonyBridge
     private static int _runtimeOwnershipPossible;
 
     /// <summary>
-    /// This facade deliberately has no HarmonyLib-typed fields, parameters, return values, or
-    /// locals. LabAPI installations are allowed to omit Harmony entirely, so the CLR must be able
-    /// to load and execute these lifecycle guards without resolving the optional assembly.
+    /// Detects Harmony without introducing an eager dependency.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool HarmonyPresent()
@@ -50,8 +48,7 @@ internal static class HarmonyBridge
         }
         catch
         {
-            // Once Talky has entered the patch implementation, an incompatible/unreadable
-            // Harmony runtime cannot prove ownership was released. Fail closed for re-enable.
+            // Treat unverifiable patch ownership as retained.
             return true;
         }
     }
@@ -79,9 +76,7 @@ internal static class HarmonyBridge
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void RemovePatches()
     {
-        // If Harmony has never been loaded, Talky cannot have installed a Harmony patch in this
-        // AppDomain. Avoid touching the implementation type so optional-dependency resolution
-        // remains genuinely lazy.
+        // Avoid resolving the optional implementation until patch ownership is possible.
         if (!RuntimeOwnershipPossible())
             return;
 
@@ -135,8 +130,7 @@ internal static class HarmonyBridge
 }
 
 /// <summary>
-/// Harmony-dependent implementation. No method on this type is reached until the dependency-free
-/// facade has proved that 0Harmony is already loaded by the host.
+/// Harmony-dependent implementation loaded only after the host dependency is present.
 /// </summary>
 internal static class HarmonyRuntimeBridge
 {
@@ -168,9 +162,7 @@ internal static class HarmonyRuntimeBridge
     private static int _callbackFailureLogged;
 
     /// <summary>
-    /// Reports both locally retained patch state and owner-scoped Harmony patches left by an
-    /// interrupted reload. This is a cold lifecycle check; callback paths never enumerate
-    /// Harmony's patch registry.
+    /// Checks retained and owner-scoped patch state outside callback paths.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static bool HasOwnedPatchState()
@@ -187,7 +179,7 @@ internal static class HarmonyRuntimeBridge
         }
         catch
         {
-            // An unreadable Harmony registry cannot prove that no Talky-owned patch remains.
+            // Treat unreadable patch state as owned.
             return true;
         }
     }
@@ -292,16 +284,12 @@ internal static class HarmonyRuntimeBridge
 
             RemovePatchesInternal();
 
-            // Re-arm after the sweep. RemovePatchesInternal ends in ClearPatchState, which
-            // clears the ownership flag, and everything below this line can leave a live
-            // Talky-owned patch behind. Without this the flag is 0 while _patched is true, and
-            // RemovePatches() returns at its RuntimeOwnershipPossible guard without unpatching.
+            // Re-establish cleanup ownership before creating new patch state.
             HarmonyBridge.MarkRuntimeOwnershipPossible();
             _harmony = new Harmony(OwnerId);
             _target = target;
 
-            // Remove a stale Talky-owned patch left by an interrupted plugin reload before
-            // installing the currently loaded methods.
+            // Remove stale owner-scoped patches before applying the current methods.
             _harmony.Unpatch(target, HarmonyPatchType.All, OwnerId);
 
             HarmonyMethod prefix = new HarmonyMethod(PrefixMethod)
@@ -343,8 +331,7 @@ internal static class HarmonyRuntimeBridge
             }
             else
             {
-                // Retain the handle so Disable or a later apply can retry owner-scoped
-                // cleanup. Runtime mode guards keep a possibly stale patch inert.
+                // Retain patch state so a later cleanup can retry.
                 _target = retainedTarget;
                 _patched = true;
             }
@@ -375,8 +362,8 @@ internal static class HarmonyRuntimeBridge
         }
         catch (Exception exception)
         {
-            Logger.Error("Talky failed to remove its CedMod sync patch: " + exception);
-            // Keep the target and owner handle so a later Disable can retry cleanup.
+            Logger.Error("Failed to remove its CedMod sync patch: " + exception);
+            // Retain patch state so a later cleanup can retry.
             throw;
         }
     }
@@ -392,8 +379,7 @@ internal static class HarmonyRuntimeBridge
                 OwnerId);
         }
 
-        // A previous plugin instance may have lost its MethodInfo handle while Harmony retained
-        // the owner-scoped patch. Sweep only this plugin's owner id and verify it is gone.
+        // Sweep owner-scoped patches that survived a previous plugin instance.
         foreach (MethodBase method in Harmony.GetAllPatchedMethods().ToArray())
         {
             Patches patches = Harmony.GetPatchInfo(method);
@@ -448,7 +434,7 @@ internal static class HarmonyRuntimeBridge
         }
         catch
         {
-            // Preserve the original patching failure for the caller's diagnostic.
+            // Do not replace the primary patching failure with a cleanup failure.
             return false;
         }
     }
@@ -536,12 +522,12 @@ internal static class HarmonyRuntimeBridge
         try
         {
             Logger.Error(
-                $"Talky's CedMod sync {phase} failed; CedMod processing will continue: " +
+                $"CedMod sync {phase} failed; CedMod processing will continue: " +
                 exception);
         }
         catch
         {
-            // Never let diagnostic logging break CedMod's synchronization loop.
+            // Diagnostic logging must not disrupt CedMod synchronization.
         }
     }
 }

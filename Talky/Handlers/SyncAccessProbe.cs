@@ -5,10 +5,7 @@ using Logger = LabApi.Features.Console.Logger;
 namespace Talky.Handlers;
 
 /// <summary>
-/// The position-distributor members Talky rewrites head sync through are private in the assembly
-/// the server loads and public in the publicized assembly Talky compiles against. Whether the
-/// runtime actually rejects those call sites is a property of the deployed build, so each one is
-/// probed rather than assumed.
+/// Identifies publicized sync-member call sites that require runtime verification.
 /// </summary>
 internal enum SyncAccessSite
 {
@@ -24,12 +21,7 @@ internal enum SyncAccessSite
 }
 
 /// <summary>
-/// One-shot outcome reporting for the private-member call sites in <see cref="FakeLookHandler"/>.
-///
-/// These sites run per receiver per target per tick, so an unconditional log would emit tens of
-/// thousands of lines a second and drown the measurement it is meant to inform. Each site reports
-/// its first success and its first failure exactly once and counts the rest, which is enough to
-/// answer whether the runtime permits the access without perturbing the run.
+/// Reports each site's first success and failure plus aggregate teardown totals.
 /// </summary>
 internal static class SyncAccessProbe
 {
@@ -45,7 +37,7 @@ internal static class SyncAccessProbe
         if (Reported[index] != 0 || Interlocked.Exchange(ref Reported[index], 1) != 0)
             return;
 
-        Logger.Info($"Talky sync access probe [{site}]: PERMITTED on first call.");
+        Logger.Info($"Sync access probe [{site}]: PERMITTED on first call.");
     }
 
     public static void Failed(SyncAccessSite site, Exception exception)
@@ -56,13 +48,12 @@ internal static class SyncAccessProbe
             return;
 
         Logger.Error(
-            $"Talky sync access probe [{site}]: REJECTED by the runtime -- " +
+            $"Sync access probe [{site}]: REJECTED by the runtime -- " +
             $"{exception.GetType().Name}: {exception.Message}");
     }
 
     /// <summary>
-    /// Writes one line per site with its totals. Called at teardown so a run ends with an explicit
-    /// verdict rather than the absence of an error line.
+    /// Logs aggregate access totals during teardown.
     /// </summary>
     public static void LogSummary()
     {
@@ -73,7 +64,7 @@ internal static class SyncAccessProbe
             if (successes == 0L && failures == 0L)
             {
                 Logger.Info(
-                    $"Talky sync access probe [{(SyncAccessSite)index}]: NOT REACHED this session.");
+                    $"Sync access probe [{(SyncAccessSite)index}]: NOT REACHED this session.");
                 continue;
             }
 
@@ -81,7 +72,7 @@ internal static class SyncAccessProbe
                 ? "PERMITTED"
                 : successes == 0L ? "REJECTED" : "MIXED";
             Logger.Info(
-                $"Talky sync access probe [{(SyncAccessSite)index}]: {verdict}, " +
+                $"Sync access probe [{(SyncAccessSite)index}]: {verdict}, " +
                 $"permitted={successes}, rejected={failures}.");
         }
     }

@@ -3,8 +3,7 @@ using System;
 namespace Talky.Performance;
 
 /// <summary>
-/// Allocation-free rolling RMS over a fixed number of decoded PCM samples.
-/// Unwritten positions are treated as silence, matching a zero-initialized fixed playback window.
+/// Calculates rolling RMS over a fixed, zero-initialized PCM window.
 /// </summary>
 public sealed class RollingVoiceEnergy
 {

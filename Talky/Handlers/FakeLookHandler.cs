@@ -67,11 +67,10 @@ public class FakeLookHandler
     }
     
     
-    // Save the last sync data before it is changed
+    // Capture stock sync data before applying a look rewrite.
     private void OnPlayerValidatedVisibility(PlayerValidatedVisibilityEventArgs ev)
     {
-        // Guard first. WriteAll calls this per receiver per target per tick, so the inactive
-        // case must cost three field reads and nothing else.
+        // Keep the inactive hot path outside instrumentation.
         TalkyRuntime runtime = Runtime;
         if (_syncMode != CedModLookSyncMode.StockSync ||
             runtime == null || !runtime.HasActiveLookTargets ||
@@ -139,7 +138,7 @@ public class FakeLookHandler
     }
     
     
-    // This is fired in FpcServerPositionDistributor just after the position buffer is written by FpcServerPositionDistributor.GetNewSyncData
+    // Runs after GetNewSyncData writes the current position buffer.
     private RoleTypeId OnRoleSyncEvent(ReferenceHub target, ReferenceHub receiver, RoleTypeId role, NetworkWriter writer)
     {
         TalkyRuntime runtime = Runtime;
@@ -149,8 +148,7 @@ public class FakeLookHandler
             return role;
         }
 
-        // Counted below the guard, so sync_entries reports pairs Talky examined rather than
-        // every pair the server distributes.
+        // Count only receiver-target pairs examined after the inactive guard.
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
         monitor?.Count(PerformanceCounter.SyncEntries);
         long started = monitor?.Begin(
@@ -175,9 +173,8 @@ public class FakeLookHandler
         TalkyPerformanceMonitor monitor,
         TalkyRuntime runtime)
     {
-        // ValidatedVisibility is raised immediately before the stock method optionally appends
-        // this target to the shared buffer. Keep the exact event object so any later visibility
-        // subscriber's change is visible here, and advance the index only for the final result.
+        // Preserve the final visibility event so later subscriber changes are honored,
+        // and advance the shared-buffer index only for targets that remain visible.
         PlayerValidatedVisibilityEventArgs visibility = _pendingVisibility;
         int bufferIndex = _pendingBufferIndex;
         bool capturedPrevious = _pendingPreviousCaptured;
@@ -228,7 +225,7 @@ public class FakeLookHandler
 
         if (target == receiver)
         {
-            return role; // Don't modify own player data
+            return role;
         }
 
         if (target.IsSpectatedBy(receiver))
@@ -237,7 +234,6 @@ public class FakeLookHandler
                 return role;
         }
 
-        // Use cached LookOverride instead of TryGetComponent
         if (!runtime.TryGetLookOverride(target.netId, out LookOverride tracker) || tracker == null)
         {
             return role;
@@ -250,10 +246,7 @@ public class FakeLookHandler
         
         if(tracker.NextLookOffset == Vector2.zero && tracker.LastLookOffset == Vector2.zero) return role;
         
-        // RoleSyncEvent also fires from PlayerRoleManager.SendNewRoleInfo during role
-        // changes, outside the WriteAll position-distribution cycle. In that path,
-        // PreviouslySent isn't populated for this receiver, _directLastSyncData is stale,
-        // and the buffer indices don't correspond to this (receiver, target) pair.
+        // Role-sync calls outside position distribution lack matching cache and buffer state.
         Dictionary<uint, Dictionary<uint, FpcSyncData>> previouslySent;
         try
         {
@@ -273,7 +266,7 @@ public class FakeLookHandler
         
         if(!receiverPrev.TryGetValue(target.netId, out var _))
         {
-            // The stock distributor should already have cached this pair before RoleSyncEvent.
+            // The stock distributor must cache the pair before role sync is rewritten.
             return role;
         }
 
@@ -284,7 +277,7 @@ public class FakeLookHandler
             return role;
         }
 
-        // Validate every input before mutating the stock cache or movement module.
+        // Validate inputs before mutating shared sync state.
         float originalHorizontal = fpmm.MouseLook.CurrentHorizontal;
         float originalVertical = fpmm.MouseLook.CurrentVertical;
         FpcSyncData newSyncData;
@@ -423,8 +416,7 @@ public class FakeLookHandler
         }
         finally
         {
-            // Only Talky's prefix work is charged. CedMod's helper runs after this
-            // returns and must not be attributed to Talky's adaptive budget.
+            // Attribute only prefix work; CedMod's helper runs after this returns.
             monitor?.End(PerformanceMetric.CedModRoleSync, started);
         }
     }
@@ -439,7 +431,7 @@ public class FakeLookHandler
         CedModSyncPatchState state,
         ref FpcSyncData original)
     {
-        // Guard before instrumentation: CedMod calls this per receiver per target per tick.
+        // Reject inactive or stale patch state before instrumentation.
         bool stateReferencesMatch =
             receiver != null &&
             target != null &&
@@ -502,9 +494,7 @@ public class FakeLookHandler
 
             if (!receiverPrevious.ContainsKey(target.netId))
             {
-                // The prefix armed only after finding this pair and CedMod's original helper is
-                // expected to cache it again before the postfix. Its disappearance means the
-                // captured state no longer describes the cache being committed.
+                // A missing refreshed cache entry invalidates the state captured by the prefix.
                 return;
             }
 
@@ -549,9 +539,7 @@ public class FakeLookHandler
             CedModRewriteCommit<FpcSyncData> commit =
                 CedModRewriteCommit<FpcSyncData>.Rewrite(rewritten);
 
-            // CedMod caches its original record before returning. Update that cache first,
-            // then return the exact same record so the next delta is based on what this
-            // receiver actually observed.
+            // Commit the same rewritten record to the cache and outgoing value.
             receiverPrevious[target.netId] = commit.CacheValue;
             original = commit.Outgoing;
             monitor?.Count(PerformanceCounter.Rewrites);
@@ -572,7 +560,7 @@ public class FakeLookHandler
     private void OnShoot(PlayerShotWeaponEventArgs ev)
     {
         if (!AnimationEventsEnabled()) return;
-        if (ev.FirearmItem.Base.TryGetModule(out IAdsModule module) && module.AdsTarget) return; // Don't reset if aiming down sights
+        if (ev.FirearmItem.Base.TryGetModule(out IAdsModule module) && module.AdsTarget) return;
 
         if (TryGetLookOverride(ev.Player.ReferenceHub.netId, out var lookOverride) && lookOverride != null)
             lookOverride.LastBusyTime = Time.time + 1f;
@@ -690,8 +678,7 @@ public class FakeLookHandler
 
     public void UnregisterEvents()
     {
-        // Make a stale owner patch inert before touching event subscriptions. This remains
-        // fail-closed even if an external event accessor throws during teardown.
+        // Make stale patches inert before removing event subscriptions.
         _syncMode = CedModLookSyncMode.CedModUnsupported;
 
         if (_directSyncRegistered)

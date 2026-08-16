@@ -5,8 +5,7 @@ using Talky.Settings;
 namespace Talky.Runtime;
 
 /// <summary>
-/// Immutable runtime-facing policy. The performance governor maps its effective tier to this
-/// compact shape so the frame loop never needs to inspect mutable governor state.
+/// Immutable frame-loop policy snapshot.
 /// </summary>
 public sealed class TalkyRuntimePolicy
 {

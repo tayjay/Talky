@@ -33,9 +33,7 @@ public class Plugin : Plugin<Config>
     private bool _fullyEnabled;
     private bool _pluginsEnabledSubscribed;
 
-    // Set by the EXILED native path (TalkyBridge.Enable) before Enable() runs, so Enable() runs
-    // post-load setup directly instead of subscribing to LabAPI's ServerEvents.PluginsEnabled,
-    // which has already fired by the time EXILED enables the embedded native plugin.
+    // Uses the EXILED lifecycle path, which runs post-load setup without waiting for LabAPI's load event.
     internal bool ExiledNativeMode;
 
     public Plugin()
@@ -62,9 +60,7 @@ public class Plugin : Plugin<Config>
         ExiledRegistration.TryRegisterNativePlugin();
     }
 
-    // Wires identity + lifecycle for the embedded EXILED shim (Talky.Exiled.Shim.dll). The shim reads
-    // these through TalkyBridge so it needs no compile-time reference back to this assembly.
-    // Harmless on LabAPI-only servers, where the shim is never loaded.
+    // Exposes identity and lifecycle to the embedded shim without a reverse assembly reference.
     private void WireExiledBridge()
     {
         TalkyBridge.Name = Name;
@@ -73,7 +69,7 @@ public class Plugin : Plugin<Config>
         TalkyBridge. Version = Version;
         TalkyBridge.Enable = cfg =>
         {
-            if (cfg != null) Config = cfg;   // adopt EXILED's loaded config
+            if (cfg != null) Config = cfg;
             ExiledNativeMode = true;
             Enable();
         };
@@ -119,12 +115,11 @@ public class Plugin : Plugin<Config>
             {
                 _pluginsEnabledSubscribed = true;
                 ServerEvents.PluginsEnabled += OnPluginsEnabled;
-                // PluginsEnabled is an initial-load signal. A reload after that signal needs a
-                // bounded fallback so the plugin cannot remain half-enabled forever.
+                // Reloads can occur after PluginsEnabled, so schedule bounded post-load setup.
                 SchedulePostEnable(generation, 1f);
             }
 
-            Logger.Info("Talky was enabled.");
+            Logger.Info("Was enabled.");
         }
         catch
         {
@@ -134,7 +129,7 @@ public class Plugin : Plugin<Config>
             }
             catch (Exception cleanupException)
             {
-                Logger.Error("Talky failed to roll back a partial enable: " + cleanupException);
+                Logger.Error("Failed to roll back a partial enable: " + cleanupException);
             }
 
             throw;
@@ -213,8 +208,7 @@ public class Plugin : Plugin<Config>
         bool hasNonMonitorResidue =
             HasOwnedLifecycleState(includePerformanceMonitor: false);
 
-        // A later Disable() retry reuses the monitor and disposes it only after all other
-        // ownership is demonstrably gone.
+        // Retain the monitor until all other owned state has been released.
         TalkyPerformanceMonitor performanceMonitor = PerformanceMonitor;
         if (!hasNonMonitorResidue && performanceMonitor != null &&
             TryCleanup("dispose the performance monitor", performanceMonitor.Dispose))
@@ -223,12 +217,12 @@ public class Plugin : Plugin<Config>
         }
 
         if (hadOwnedState)
-            Logger.Warn("Talky was disabled.");
+            Logger.Warn("Was disabled.");
 
         if (HasOwnedLifecycleState())
         {
             Logger.Error(
-                "Talky cleanup is incomplete. Ownership references were retained and a new " +
+                "Cleanup is incomplete. Ownership references were retained and a new " +
                 "Enable() will be refused until Disable() succeeds.");
         }
     }
@@ -242,7 +236,7 @@ public class Plugin : Plugin<Config>
         }
         catch (Exception exception)
         {
-            Logger.Error($"Talky failed to {operation}: {exception}");
+            Logger.Error($"Failed to {operation}: {exception}");
             return false;
         }
     }
@@ -278,7 +272,7 @@ public class Plugin : Plugin<Config>
             {
                 PerformanceMonitor?.Count(PerformanceCounter.CleanupFailures);
                 Logger.Error(
-                    "Talky could not release its PluginsEnabled callback; cleanup will retry: " +
+                    "Could not release its PluginsEnabled callback; cleanup will retry: " +
                     exception);
             }
         }
@@ -362,11 +356,11 @@ public class Plugin : Plugin<Config>
                 plan,
                 patchDetail);
 
-            Logger.Debug("Talky was fully enabled.", Config.Debug);
+            Logger.Debug("Was fully enabled.", Config.Debug);
         }
         catch (Exception exception)
         {
-            Logger.Error("Talky post-enable setup failed: " + exception);
+            Logger.Error("Post-enable setup failed: " + exception);
             bool eventCleanupSucceeded = true;
             try
             {
@@ -375,7 +369,7 @@ public class Plugin : Plugin<Config>
             catch (Exception cleanupException)
             {
                 eventCleanupSucceeded = false;
-                Logger.Error("Talky failed to remove partial event subscriptions: " + cleanupException);
+                Logger.Error("Failed to remove partial event subscriptions: " + cleanupException);
             }
 
             bool patchCleanupSucceeded =
@@ -384,7 +378,7 @@ public class Plugin : Plugin<Config>
             if (!eventCleanupSucceeded || !patchCleanupSucceeded)
             {
                 Logger.Error(
-                    "Talky will disable instead of re-registering over unresolved event or " +
+                    "Will disable instead of re-registering over unresolved event or " +
                     "Harmony ownership.");
                 Disable();
                 return;
@@ -396,12 +390,12 @@ public class Plugin : Plugin<Config>
                 FakeLookHandler.RegisterEvents();
                 _fullyEnabled = true;
                 Logger.Error(
-                    "Talky recovered in common-events-only mode; outbound head-sync " +
+                    "Recovered in common-events-only mode; outbound head-sync " +
                     "rewriting is disabled, while other Talky features remain enabled.");
             }
             catch (Exception recoveryException)
             {
-                Logger.Error("Talky post-enable recovery failed: " + recoveryException);
+                Logger.Error("Post-enable recovery failed: " + recoveryException);
                 Disable();
             }
         }
@@ -429,18 +423,14 @@ public class Plugin : Plugin<Config>
 
     private void ValidateConfiguration()
     {
-        // SSTalkySettings.Activate dereferences every Translations member. A config file with a
-        // bare "translations:" key and nothing indented beneath it deserializes to null, and the
-        // resulting NullReferenceException surfaces as an unexplained Talky load failure.
+        // Normalize an omitted translations mapping before registering settings.
         Config.Translations ??= new TranslationsConfig();
 
-        // Deliberately warned about rather than corrected. SpeechTracker.NormalizeSpeechCeiling
-        // already widens an inverted range where it is used, and it does so while keeping the
-        // administrator's floor -- resetting both anchors to defaults would discard it.
+        // Preserve the configured floor; speech evaluation widens an invalid ceiling at use time.
         if (Config.LowDbThreshold >= Config.HighDbThreshold)
         {
             Logger.Warn(
-                $"Talky's low_db_threshold ({Config.LowDbThreshold}) is not below " +
+                $"The low_db_threshold ({Config.LowDbThreshold}) is not below " +
                 $"high_db_threshold ({Config.HighDbThreshold}); the speech range will be " +
                 "widened automatically.");
         }
@@ -450,7 +440,7 @@ public class Plugin : Plugin<Config>
         if (validation.WasCorrected)
         {
             Logger.Warn(
-                $"Talky corrected {validation.CorrectionCount} performance setting(s): " +
+                $"Corrected {validation.CorrectionCount} performance setting(s): " +
                 validation.CorrectionSummary);
         }
     }

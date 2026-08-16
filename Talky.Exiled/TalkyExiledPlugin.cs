@@ -8,9 +8,7 @@ using Talky.Settings;
 namespace Talky.Exiled;
 
 /// <summary>
-/// EXILED-managed config: inherits every Talky setting and satisfies <see cref="IConfig"/> via
-/// Config's virtual IsEnabled/Debug. It lives in this separate (embedded) assembly so Talky.dll
-/// never names an EXILED type in its own metadata.
+/// Provides Talky's EXILED-facing configuration.
 /// </summary>
 public sealed class TalkyExiledConfig : Config, IConfig
 {
@@ -18,9 +16,7 @@ public sealed class TalkyExiledConfig : Config, IConfig
 }
 
 /// <summary>
-/// The native EXILED plugin. Talky.dll loads this type from its embedded resource and adds the
-/// instance to EXILED's loader. Identity and lifecycle are forwarded through <see cref="TalkyBridge"/>,
-/// so this assembly needs no compile-time reference back to Talky.dll.
+/// Forwards EXILED plugin identity and lifecycle through <see cref="TalkyBridge"/>.
 /// </summary>
 public sealed class TalkyExiledPlugin : Plugin<TalkyExiledConfig>
 {
@@ -52,6 +48,6 @@ public sealed class TalkyExiledPlugin : Plugin<TalkyExiledConfig>
 
     public override void OnRegisteringCommands()
     {
-        // No-op: Talky registers no EXILED commands, and we don't want the base scanning this assembly.
+        // Skip command scanning because Talky registers no EXILED commands.
     }
 }

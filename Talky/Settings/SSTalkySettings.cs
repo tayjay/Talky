@@ -22,8 +22,7 @@ public sealed class SSTalkySettings
     private const float GrabCooldown = 1.111f;
     private const float EmotionCooldown = 0.5f;
 
-    // Edge state and cooldowns for client-controlled settings. ServerOnSettingValueReceived is
-    // driven entirely by the client, so a modified one can send as fast as it likes.
+    // Edge state and cooldowns bound client-driven setting events.
     private readonly HashSet<uint> _grabHeld = new HashSet<uint>();
     private readonly Dictionary<uint, float> _nextGrabAt = new Dictionary<uint, float>(128);
     private readonly Dictionary<uint, float> _nextEmotionAt = new Dictionary<uint, float>(128);
@@ -90,7 +89,7 @@ public sealed class SSTalkySettings
                     : ServerSpecificSettingsSync.DefinedSettings.Concat(_ownedSettings).ToArray();
             ServerSpecificSettingsSync.SendToAll();
 
-            // Set before subscribing so a throw from += cannot leave the flag lying.
+            // Record ownership before subscribing so partial subscriptions remain removable.
             _eventSubscribed = true;
             ServerSpecificSettingsSync.ServerOnSettingValueReceived += ProcessUserInput;
         }
@@ -118,12 +117,11 @@ public sealed class SSTalkySettings
             }
             catch (Exception exception)
             {
-                Logger.Error("Talky failed to unsubscribe its settings handler: " + exception);
+                Logger.Error("Failed to unsubscribe its settings handler: " + exception);
             }
         }
 
-        // Nothing owned means nothing was ever appended, so there is no shared array to repair
-        // and no reason to rebroadcast the whole settings list to every client.
+        // Skip shared-array repair and rebroadcast when no settings were added.
         if (_ownedSettings != null)
         {
             try
@@ -141,12 +139,11 @@ public sealed class SSTalkySettings
             catch (Exception exception)
             {
                 Logger.Error(
-                    "Talky failed to fully remove its server-specific settings: " + exception);
+                    "Failed to fully remove its server-specific settings: " + exception);
             }
         }
 
-        // Released regardless of the outcome above. The !_active check is what makes a surviving
-        // subscription inert, so holding these references buys nothing.
+        // Clear local references even if shared-state cleanup fails; inactive handlers are inert.
         _ownedSettings = null;
         _grabKeybind = null;
         _defaultEmotionDropdown = null;
@@ -196,8 +193,7 @@ public sealed class SSTalkySettings
 
     private void ProcessUserInput(ReferenceHub hub, ServerSpecificSettingBase setting)
     {
-        // ServerOnSettingValueReceived is a global multicast: a throw here aborts dispatch for
-        // every plugin whose handler is registered after Talky's.
+        // Keep this handler exception-free because the setting event is a global multicast.
         if (!_active || hub == null || setting == null)
             return;
 
@@ -205,8 +201,7 @@ public sealed class SSTalkySettings
         uint networkId = hub.netId;
         float now = Time.time;
 
-        // The concrete-type test is not redundant with the id test: Deactivate rewrites the
-        // shared DefinedSettings array, so ids can collide across a Talky reload.
+        // Match both id and type because reloads can reuse setting ids.
         if (_grabKeybind != null && setting.SettingId == _grabKeybind.SettingId &&
             setting is SSKeybindSetting keybind)
         {
@@ -216,8 +211,7 @@ public sealed class SSTalkySettings
                 return;
             }
 
-            // Edge-triggered. Without this, a client repeating pressed=true turns each message
-            // into a server-wide OverlayAnimationsBase.SendRpc.
+            // Treat keybind input as an edge to prevent repeated broadcasts.
             if (!_grabHeld.Add(networkId))
                 return;
 
@@ -237,8 +231,7 @@ public sealed class SSTalkySettings
             setting.SettingId == _defaultEmotionDropdown.SettingId &&
             setting is SSDropdownSetting dropdown)
         {
-            // Validated, not raw: the raw index is unclamped client input, and range-checking it
-            // would discard a selection the game itself would have clamped into range.
+            // Use the game's clamped selection rather than raw client input.
             int selection = dropdown.SyncSelectionIndexValidated;
             if (!IsValidEmotion(selection))
             {
@@ -248,8 +241,7 @@ public sealed class SSTalkySettings
 
             EmotionPresetType preset = (EmotionPresetType)selection;
 
-            // The tracker default is a local field read at the player's next spawn, so it costs
-            // nothing and is never rate limited. Only the replicated write below is.
+            // Update the spawn default immediately; rate-limit only the replicated write.
             if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
                     networkId,
                     out SpeechTracker tracker) == true)
@@ -266,8 +258,6 @@ public sealed class SSTalkySettings
             _nextEmotionAt[networkId] = now + EmotionCooldown;
             Player player = Player.Get(hub);
 
-            // Skip the replicated write when it would change nothing: a client resending an
-            // unchanged selection should cost zero network traffic, not one broadcast per window.
             if (player != null && !player.IsDestroyed && player.Emotion != preset)
                 player.Emotion = preset;
 
@@ -299,8 +289,7 @@ public sealed class SSTalkySettings
         if (player == null || player.IsDestroyed || player.ReferenceHub == null)
             return;
 
-        // _overlayAnimations is a publicized private field on a Northwood type that is free to
-        // change shape, so index 1 is checked rather than assumed.
+        // Publicized private-field access is version-sensitive, so validate the expected slot.
         if (!(player.ReferenceHub.roleManager.CurrentRole is IFpcRole currentRole) ||
             !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel model) ||
             !model.TryGetSubcontroller(out OverlayAnimationsSubcontroller subcontroller) ||

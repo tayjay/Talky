@@ -1,16 +1,13 @@
 ﻿using System;
 using System.Diagnostics;
+using System.Text;
 using LabApi.Features.Console;
 using Talky.Settings;
 
 namespace Talky.Performance;
 
 /// <summary>
-/// Production adapter around the allocation-conscious core profiler and adaptive governor.
-/// All hot-path methods avoid formatting, LINQ, closures, and per-call object creation.
-///
-/// Callback/frame samples -> profiler window -> governor decision -> cached runtime policy.
-/// Completed windows also feed one reusable periodic-summary accumulator.
+/// Adapts runtime measurements to the profiler, adaptive governor, and periodic summaries.
 /// </summary>
 public sealed class TalkyPerformanceMonitor : IDisposable
 {
@@ -72,10 +69,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _transitions.Reset();
     }
 
-    /// <summary>
-    /// The policy produced from the administrator's hard feature ceilings and the current
-    /// adaptive tier. The value is cached so reading it from a hot path performs no work.
-    /// </summary>
+    /// <summary>Cached policy derived from configured feature limits and the current tier.</summary>
     public EffectivePerformancePolicy CurrentPolicy => _currentPolicy;
 
     public PerformanceTier Tier => _governor.CurrentTier;
@@ -83,9 +77,8 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     public bool IsFrozen => _frozen || _governor.IsFrozen;
 
     /// <summary>
-    /// Starts a measurement. Passing zero or a negative sampling rate selects the production
-    /// default: voice work is sampled 1/8, role-sync work 1/64, and batches exactly.
-    /// A negative return value means this invocation was not sampled.
+    /// Starts a sampled measurement using the metric catalog cadence unless overridden.
+    /// A negative result means the invocation was not sampled.
     /// </summary>
     public long Begin(PerformanceMetric metric, int sampleEvery = 0)
     {
@@ -98,17 +91,12 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         return _profiler.BeginSample(metric, sampleEvery);
     }
 
-    /// <summary>
-    /// Ends a measurement. PerformanceProfiler derives the sampling weight from exact call and
-    /// sample counts; weight remains on this adapter API so call sites can state their cadence.
-    /// </summary>
+    /// <summary>Ends a measurement; weight is retained for call-site compatibility and is not applied.</summary>
     public void End(PerformanceMetric metric, long started, int weight = 1)
     {
         if (_frozen || !_profilingEnabled || started < 0L)
             return;
 
-        // Weight is intentionally not multiplied here. Multiplication would double-weight the
-        // core profiler's call-count/sample-count estimate, especially at window boundaries.
         _ = weight;
         _profiler.EndSample(metric, started);
     }
@@ -125,8 +113,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     }
 
     /// <summary>
-    /// Records one raw, unsmoothed server frame and evaluates completed two-second windows.
-    /// Idle and out-of-round frames remain diagnostic data but cannot drive governor changes.
+    /// Records a server frame; ineligible frames remain diagnostic and cannot drive governor changes.
     /// </summary>
     public void OnFrame(
         double now,
@@ -230,8 +217,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         }
         else
         {
-            // A window which overlaps idle/startup/round transition is never used as
-            // server-health evidence after the server becomes active again.
+            // Any ineligible frame makes the full window ineligible for server-health decisions.
             _windowHealthEligible &= healthEligible;
         }
 
@@ -331,6 +317,44 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         _summary.ObserveTier(observedTier);
         _summary.AddWindow(window, breakdown);
         TryLogSummary(_lastNowSeconds);
+        LogWindowDetail(window);
+    }
+
+    /// <summary>
+    /// Logs per-metric and per-counter detail for a completed profiler window in debug mode.
+    /// </summary>
+    private void LogWindowDetail(PerformanceWindow window)
+    {
+        if (_config?.Debug != true)
+            return;
+
+        StringBuilder builder = new StringBuilder(1024);
+        builder.Append("Window detail: frames=").Append(window.FrameCount)
+            .Append(", duration=").Append(window.DurationSeconds.ToString("F3"))
+            .Append("s, metrics[name=calls/samples/est_total_ms/avg/p50/p95/p99/max]");
+        for (int index = 0; index < (int)PerformanceMetric.Count; index++)
+        {
+            PerformanceMetric metric = (PerformanceMetric)index;
+            MetricSnapshot snapshot = window.GetMetric(metric);
+            builder.Append("; ").Append(metric).Append('=')
+                .Append(snapshot.CallCount).Append('/')
+                .Append(snapshot.SampleCount).Append('/')
+                .Append(snapshot.EstimatedTotalMilliseconds.ToString("F5")).Append('/')
+                .Append(snapshot.AverageMilliseconds.ToString("F6")).Append('/')
+                .Append(snapshot.P50Milliseconds.ToString("F6")).Append('/')
+                .Append(snapshot.P95Milliseconds.ToString("F6")).Append('/')
+                .Append(snapshot.P99Milliseconds.ToString("F6")).Append('/')
+                .Append(snapshot.MaxMilliseconds.ToString("F6"));
+        }
+
+        builder.Append(" | counters");
+        for (int index = 0; index < (int)PerformanceCounter.Count; index++)
+        {
+            PerformanceCounter counter = (PerformanceCounter)index;
+            builder.Append("; ").Append(counter).Append('=').Append(window.GetCounter(counter));
+        }
+
+        Logger.Debug(builder.ToString(), true);
     }
 
     public void Reconfigure(Config config)
@@ -360,8 +384,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             previousCommittedTier,
             previousProbeActive);
 
-        // Configuration reload is a cold path. Reset in place when dimensions are unchanged;
-        // replace only when the configured window size changes.
+        // Reuse storage unless the configured window size changes.
         int windowSeconds = ValidatedWindowSeconds(config);
         if (_profiler.WindowSeconds == windowSeconds)
             _profiler.Reset();
@@ -373,9 +396,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         ResetServerRateSnapshots();
     }
 
-    /// <summary>
-    /// Clears measurements at a round boundary while preserving the governor's protection tier.
-    /// </summary>
+    /// <summary>Clears round measurements while preserving the governor tier.</summary>
     public void ResetForRound()
     {
         if (_disposed)
@@ -425,7 +446,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
         PerformanceConfig settings = _governor.Settings;
 
         Logger.Info(
-            $"Talky performance configuration reloaded: " +
+            $"Performance configuration reloaded: " +
             $"mode={previousMode}->{settings.Mode}, " +
             $"effective_tier={previousTier}->{Tier}, " +
             $"committed_tier={previousCommittedTier}->{_governor.CommittedTier}, " +
@@ -566,7 +587,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
             ? 1000d / _latestSmoothDeltaMilliseconds
             : 0d;
         Logger.Warn(
-            $"Talky performance tier {decision.PreviousTier} -> {decision.CurrentTier}: " +
+            $"Performance tier {decision.PreviousTier} -> {decision.CurrentTier}: " +
             $"{decision.Reason}; state=" +
             $"{(_governor.IsRecoveryProbeActive ? "probe" : "committed")}, " +
             $"committed_tier={_governor.CommittedTier}, " +
@@ -604,7 +625,7 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         _failureLogged = true;
         Logger.Warn(
-            $"Talky performance monitor froze after {reason}. " +
+            $"Performance monitor froze after {reason}. " +
             "The committed tier is retained; reload the configuration to retry profiling.");
     }
 

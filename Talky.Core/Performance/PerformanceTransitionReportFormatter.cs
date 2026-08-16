@@ -5,7 +5,7 @@ using Talky.Settings;
 namespace Talky.Performance;
 
 /// <summary>
-/// Cold-path formatting for a completed observational tier comparison.
+/// Formats a completed observational tier comparison.
 /// </summary>
 public static class PerformanceTransitionReportFormatter
 {
@@ -30,7 +30,7 @@ public static class PerformanceTransitionReportFormatter
         if (!before.HasData || !after.HasData)
         {
             return
-                $"Talky observed tier impact #{impact.Sequence} " +
+                $"Observed tier impact #{impact.Sequence} " +
                 $"{impact.FromTier} -> {impact.ToTier}: status={status}, " +
                 $"trigger={impact.TransitionReason}{completion}, {evidence}, " +
                 $"changes=[{changes}], " +
@@ -44,7 +44,7 @@ public static class PerformanceTransitionReportFormatter
             after.FrameP95Milliseconds - before.FrameP95Milliseconds;
 
         return
-            $"Talky observed tier impact #{impact.Sequence} " +
+            $"Observed tier impact #{impact.Sequence} " +
             $"{impact.FromTier} -> {impact.ToTier}: status={status}, " +
             $"trigger={impact.TransitionReason}{completion}, {evidence}, " +
             $"changes=[{changes}], " +

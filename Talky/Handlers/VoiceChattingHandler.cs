@@ -16,8 +16,7 @@ public sealed class VoiceChattingHandler
 
     private bool _registered;
     /// <summary>
-    /// Compatibility view for integrations that previously read the handler cache.
-    /// Runtime owns the mutable dictionary.
+    /// Read-only view of the runtime-owned speech tracker cache.
     /// </summary>
     public IReadOnlyDictionary<uint, SpeechTracker> SpeechTrackerCache =>
         Plugin.Instance?.Runtime?.SpeechTrackers ?? EmptyTrackers;

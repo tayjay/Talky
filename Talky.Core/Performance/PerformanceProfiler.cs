@@ -39,8 +39,7 @@ public readonly struct MetricSnapshot
 }
 
 /// <summary>
-/// One immutable-after-close view into the profiler's preallocated history ring.
-/// The instance is reused only after it ages out of the configured history.
+/// Exposes a completed profiler window backed by a reusable history slot.
 /// </summary>
 public sealed class PerformanceWindow
 {
@@ -273,8 +272,7 @@ public sealed class PerformanceWindow
 }
 
 /// <summary>
-/// Allocation-free aggregate of raw frame histograms from completed profiler windows.
-/// Unlike averaging per-window percentiles, merging bins preserves percentile weighting.
+/// Merges raw frame histograms while preserving percentile weighting.
 /// </summary>
 public sealed class FrameHistogramAccumulator
 {
@@ -335,7 +333,7 @@ public sealed class FrameHistogramAccumulator
 }
 
 /// <summary>
-/// Single-threaded, allocation-free-after-construction profiler with a fixed history ring.
+/// Records single-threaded performance data in fixed reusable storage.
 /// </summary>
 public sealed class PerformanceProfiler
 {
@@ -374,7 +372,7 @@ public sealed class PerformanceProfiler
         int completedCapacity = (int)Math.Max(
             1L,
             ((long)historySeconds + windowSeconds - 1L) / windowSeconds);
-        // One additional slot remains active while the complete history stays readable.
+        // Reserve one active slot while completed history remains readable.
         _windows = new PerformanceWindow[completedCapacity + 1];
         for (int i = 0; i < _windows.Length; i++)
             _windows[i] = new PerformanceWindow(timestampFrequency);
@@ -430,8 +428,7 @@ public sealed class PerformanceProfiler
     }
 
     /// <summary>
-    /// Records one caller-measured invocation. Use this instead of Begin/End when a deterministic
-    /// timestamp source is needed by a test or adapter.
+    /// Records a caller-measured duration without reading the profiler clock.
     /// </summary>
     public void RecordDurationTicks(PerformanceMetric metric, long elapsedTicks)
     {

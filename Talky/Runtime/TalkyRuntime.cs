@@ -16,7 +16,7 @@ using PerformanceCounter = Talky.Performance.PerformanceCounter;
 namespace Talky.Runtime;
 
 /// <summary>
-/// Single frame-loop owner for all Talky player state.
+/// Owns the frame loop and per-player speech and look state.
 /// </summary>
 public sealed class TalkyRuntime : IDisposable
 {
@@ -89,12 +89,10 @@ public sealed class TalkyRuntime : IDisposable
         {
             ResetFaultDiagnostics();
             ResetDeadlines(Time.time);
-            // Mark ownership before invoking the event accessor. If it throws after partially
-            // subscribing, Disable retains enough state to retry removal while OnUpdate is inert.
+            // Record ownership first so partial subscription can be retried during cleanup.
             _updateSubscribed = true;
             StaticUnityMethods.OnUpdate += OnUpdate;
 
-            // This is a one-time/reload path, not a frame hot path.
             foreach (Player player in Player.List)
                 RegisterPlayer(player);
         }
@@ -107,8 +105,7 @@ public sealed class TalkyRuntime : IDisposable
 
     public void Disable()
     {
-        // Make every retained/stale callback inert before attempting any operation which can
-        // throw. Ownership flags and collections remain available for a later retry.
+        // Make retained callbacks inert while preserving ownership for retryable cleanup.
         _enabled = false;
         Exception firstFailure = null;
         if (_updateSubscribed)
@@ -270,8 +267,7 @@ public sealed class TalkyRuntime : IDisposable
         if (_speechByNetworkId.TryGetValue(networkId, out SpeechTracker speech))
         {
             DetachProxyTarget(speech.Player);
-            // Remove while the tracker still owns its O(1) recent-list index. Dispose resets
-            // that index as part of making the component inert.
+            // Remove the tracker while its recent-speaker index is still valid.
             RemoveRecentSpeaker(speech);
             speech.Dispose();
             if (destroyComponents && speech != null)
@@ -378,8 +374,7 @@ public sealed class TalkyRuntime : IDisposable
                     AddRecentSpeaker(target);
                 else
                 {
-                    // A prior proximity packet may already have placed this speaker in the
-                    // physical glance pool. A remote-channel packet must not refresh that state.
+                    // Remote channels must not retain proximity-based glance eligibility.
                     RemoveRecentSpeaker(target);
                     monitor?.Count(PerformanceCounter.RemoteChannelGlanceRejections);
                 }
@@ -680,14 +675,13 @@ public sealed class TalkyRuntime : IDisposable
         Type failureType = exception?.GetType() ?? typeof(Exception);
         Plugin.Instance?.PerformanceMonitor?.Count(PerformanceCounter.RuntimeUpdateFailures);
 
-        // A persistent per-frame fault would otherwise write a stack trace 60+ times a second
-        // into the console and the log file, so report it at most once a minute with a count.
+        // Report persistent frame-loop failures once a minute with an aggregate count.
         _suppressedRuntimeFaults++;
         double nowSeconds = MonotonicSeconds();
         if (nowSeconds >= _nextRuntimeFaultDiagnosticAt)
         {
             TryLogRuntimeError(
-                "Talky runtime update failed with " + failureType.Name +
+                "Runtime update failed with " + failureType.Name +
                 "; occurrences since the previous diagnostic=" +
                 _suppressedRuntimeFaults + ".");
             _suppressedRuntimeFaults = 0;
@@ -704,7 +698,7 @@ public sealed class TalkyRuntime : IDisposable
         }
         catch
         {
-            // A logging failure must never propagate out of the frame loop.
+            // Keep logging failures out of the frame loop.
         }
     }
 
@@ -728,7 +722,7 @@ public sealed class TalkyRuntime : IDisposable
 
         while (candidate != null)
         {
-            // An acyclic chain cannot traverse more registered trackers than exist.
+            // A valid proxy chain cannot exceed the registered tracker count.
             if (remainingHops-- <= 0)
                 return source;
 
@@ -971,7 +965,7 @@ public sealed class TalkyRuntime : IDisposable
             }
         }
 
-        // Defensive cleanup for a partial registration where a look component existed alone.
+        // Clear any look component left by partial registration.
         while (_lookOverrides.Count > 0)
         {
             LookOverride look = _lookOverrides[_lookOverrides.Count - 1];

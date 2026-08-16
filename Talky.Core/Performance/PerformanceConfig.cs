@@ -132,8 +132,7 @@ public sealed class PerformanceConfigValidationResult
 }
 
 /// <summary>
-/// Produces a safe snapshot at configuration boundaries. It never mutates the supplied
-/// <see cref="PerformanceConfig"/>.
+/// Validates a cloned performance configuration without mutating the source.
 /// </summary>
 public static class PerformanceConfigValidator
 {

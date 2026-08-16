@@ -11,8 +11,7 @@ public enum PerformanceImpactOutcome
 }
 
 /// <summary>
-/// Normalized measurements from one side of a tier transition. Server percentiles are merged
-/// from raw frame histograms rather than averaged from per-window percentile values.
+/// Captures one side of a tier transition with percentiles merged from raw frame histograms.
 /// </summary>
 public readonly struct PerformanceImpactSnapshot
 {
@@ -120,9 +119,7 @@ public readonly struct PerformanceTransitionImpact
 }
 
 /// <summary>
-/// Keeps a bounded scalar/reference history around rare tier transitions. Completed profiler
-/// windows are copied into reusable accumulators before their profiler-ring slots can be reused.
-/// No player identities are retained.
+/// Tracks bounded, identity-free measurements around tier transitions.
 /// </summary>
 public sealed class PerformanceTransitionTracker
 {
@@ -229,7 +226,7 @@ public sealed class PerformanceTransitionTracker
             }
             else
             {
-                // Impact and recovery comparisons only use a continuous active-server period.
+                // Comparisons require an uninterrupted active-server period.
                 _after.Reset(0d);
             }
         }

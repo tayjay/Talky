@@ -4,8 +4,7 @@ using System.Runtime.CompilerServices;
 namespace Talky.Performance;
 
 /// <summary>
-/// Timed work recorded by <see cref="PerformanceProfiler"/>.
-/// Outer batch metrics are used for budget attribution; nested metrics remain diagnostic.
+/// Identifies timed work, with top-level metrics contributing to budget attribution.
 /// </summary>
 public enum PerformanceMetric
 {
@@ -55,8 +54,7 @@ public enum PerformanceCounter
 }
 
 /// <summary>
-/// Top-level groups shown in transition and periodic performance reports.
-/// <see cref="None"/> identifies nested diagnostics which would otherwise double-count work.
+/// Groups reportable work, with <see cref="None"/> excluding nested diagnostics from totals.
 /// </summary>
 public enum PerformanceSubsystem
 {
@@ -66,8 +64,7 @@ public enum PerformanceSubsystem
     Look = 3,
     Scheduler = 4,
     Sync = 5,
-    // Frame-controller and governor measurements only. Begin/End/Count instrumentation at
-    // individual call sites is deliberately excluded, so this is a monitoring lower bound.
+    // Excludes per-call instrumentation, so monitoring totals are a lower bound.
     Monitoring = 6,
     Count = 7,
 }
@@ -90,7 +87,7 @@ public readonly struct PerformanceMetricDefinition
 }
 
 /// <summary>
-/// Single source of truth for budget attribution, production sampling, and report grouping.
+/// Defines each metric's budget, sampling, and reporting behavior.
 /// </summary>
 public static class PerformanceMetricCatalog
 {
@@ -148,7 +145,7 @@ public static class PerformanceMetricCatalog
 }
 
 /// <summary>
-/// Allocation-free top-level view of one completed profiler window.
+/// Provides a top-level view of one completed profiler window.
 /// </summary>
 public readonly struct PerformanceBreakdown
 {

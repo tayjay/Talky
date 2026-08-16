@@ -3,8 +3,7 @@ using System;
 namespace Talky.Voice;
 
 /// <summary>
-/// Allocation-free rolling percentiles for recent speech levels.
-/// Each instance owns a fixed histogram and ring, making it suitable for one player.
+/// Tracks rolling histogram percentiles for one player's recent speech levels.
 /// </summary>
 public sealed class RollingSpeechPercentiles
 {
@@ -91,25 +90,16 @@ public sealed class RollingSpeechPercentiles
     public int Count => _count;
     public bool IsReady => _count >= _minimumObservations;
 
-    /// <summary>The raw lower percentile, quantized to the configured dB bins.</summary>
     public double LowPercentileDecibels { get; private set; } = double.NaN;
 
-    /// <summary>The raw upper percentile, quantized to the configured dB bins.</summary>
     public double HighPercentileDecibels { get; private set; } = double.NaN;
 
-    /// <summary>
-    /// Lower animation anchor after enforcing the configured minimum range.
-    /// </summary>
     public double AnimationLowDecibels { get; private set; } = double.NaN;
 
-    /// <summary>
-    /// Upper animation anchor after enforcing the configured minimum range.
-    /// </summary>
     public double AnimationHighDecibels { get; private set; } = double.NaN;
 
     /// <summary>
-    /// Adds one recent speech-window level. Non-finite values and levels below the
-    /// measurement floor are rejected without aging the existing speech history.
+    /// Observes a speech level; rejected values do not age the existing window.
     /// </summary>
     public bool Observe(double decibels)
     {
@@ -217,8 +207,7 @@ public sealed class RollingSpeechPercentiles
 }
 
 /// <summary>
-/// Tracks when a decoded sample stream has supplied one fresh, non-overlapping
-/// analysis window. Reset it when packet continuity is broken.
+/// Tracks complete, non-overlapping analysis windows in a decoded sample stream.
 /// </summary>
 public struct SpeechObservationCadence
 {
@@ -266,8 +255,7 @@ public struct SpeechObservationCadence
 }
 
 /// <summary>
-/// Tracks above-floor voice activity separately from decoded packet activity so
-/// hot-mic background cannot keep face, head-bob, or glance behavior active.
+/// Separates above-floor voice activity from packet activity so background noise cannot sustain animations.
 /// </summary>
 public struct AudibleSpeechActivity
 {
@@ -325,8 +313,7 @@ public readonly struct SpeechAnimationDecision
 }
 
 /// <summary>
-/// Maps the current speech level through either fallback thresholds or a learned
-/// percentile range. This is the value path used by face levels and head bobbing.
+/// Maps speech levels to animation intensity using learned or fallback thresholds.
 /// </summary>
 public static class SpeechAnimationMath
 {
@@ -388,8 +375,7 @@ public static class SpeechAnimationMath
     }
 
     /// <summary>
-    /// Places the live level at the center of the same 1 dB histogram bin used
-    /// by the rolling percentiles. The unquantized level still drives interpolation.
+    /// Aligns comparisons with the percentile histogram's 1 dB bins.
     /// </summary>
     public static double QuantizeForPercentileComparison(double decibels)
     {

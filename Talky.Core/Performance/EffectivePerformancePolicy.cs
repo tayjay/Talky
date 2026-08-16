@@ -4,8 +4,7 @@ using Talky.Settings;
 namespace Talky.Performance;
 
 /// <summary>
-/// Immutable effective behavior derived from operator intent and the current quality tier.
-/// A tier can suppress configured behavior, but can never enable a feature disabled by the operator.
+/// Immutable behavior that lets the current tier suppress, but never enable, configured features.
 /// </summary>
 public sealed class EffectivePerformancePolicy
 {

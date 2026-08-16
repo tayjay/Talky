@@ -3,33 +3,27 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Exiled.API.Features;     // Log
-using Exiled.API.Interfaces;   // IPlugin, IConfig
-using Exiled.Loader;           // Loader, LoaderPlugin
-using LabApi.Loader;           // PluginLoader
-using Talky.Core;              // TalkyBridge
+using Exiled.API.Features;
+using Exiled.API.Interfaces;
+using Exiled.Loader;
+using LabApi.Loader;
+using Talky.Core;
 
 namespace Talky.Bridges;
 
 /// <summary>
-/// On an EXILED server, loads the embedded Talky.Exiled.Shim assembly and registers its plugin
-/// type directly into EXILED's native plugin set (<see cref="Loader.Plugins"/>). No-ops entirely
-/// when EXILED isn't present, so a LabAPI-only server never touches an EXILED type or the shim.
+/// Registers the embedded EXILED shim only when EXILED is present.
 /// </summary>
 public static class ExiledRegistration
 {
-    // Manifest-resource name of the embedded shim. The ".bin" suffix keeps LabAPI/EXILED's
-    // auto-extractors (which only grab "*.dll"/"*.dll.compressed") from loading it on LabAPI-only
-    // servers; we load it ourselves, here, only when EXILED is present.
+    // The .bin suffix prevents host auto-extraction on LabAPI-only servers.
     private const string ShimResource = "Talky.Exiled.Shim.dll.bin";
 
-    /// <summary>Call from the LabAPI Plugin's constructor. No-ops unless loaded under EXILED.</summary>
+    /// <summary>Registers the shim when EXILED is loaded.</summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void TryRegisterNativePlugin()
     {
-        // Only reference EXILED types / load the shim when Exiled.API is actually loaded. EXILED's
-        // LoadAssembly resolves our embedded Talky.Core before this runs, so the plugin's config
-        // types are already available by the time our ctor executes.
+        // Keep EXILED type resolution behind the assembly-presence check.
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             if (asm.GetName().Name == "Exiled.API")
             {
@@ -41,7 +35,7 @@ public static class ExiledRegistration
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void EnsureRegistered()
     {
-        // If LabAPI already enabled a "Talky" (e.g. the DLL also sits in the LabAPI folder), defer to it.
+        // Defer to an already-enabled LabAPI instance.
         if (PluginLoader.EnabledPlugins.Any(p => p.Name == TalkyBridge.Name)) return;
         if (LoaderPlugin.Instance == null) return;
 
@@ -55,7 +49,7 @@ public static class ExiledRegistration
         using Stream stream = self.GetManifestResourceStream(ShimResource);
         if (stream == null)
         {
-            Log.Error($"Talky: embedded shim resource '{ShimResource}' was not found.");
+            Log.Error($"Embedded shim resource '{ShimResource}' was not found.");
             return;
         }
 
@@ -63,16 +57,15 @@ public static class ExiledRegistration
         stream.CopyTo(ms);
         Assembly shim = Assembly.Load(ms.ToArray());
 
-        // Let EXILED build the instance so it gets the same config/translation binding as a plugin
-        // loaded from disk. Returns null if the shim exposes no usable plugin type.
+        // Let EXILED create the plugin so configuration and translations bind normally.
         IPlugin<IConfig> plugin = Loader.CreatePlugin(shim);
         if (plugin == null)
         {
-            Log.Error("Talky: the embedded EXILED shim did not yield a plugin instance.");
+            Log.Error("The embedded EXILED shim did not yield a plugin instance.");
             return;
         }
 
-        // Re-add if absent (covers EXILED 'reload', which clears Loader.Plugins).
+        // EXILED reloads may clear the plugin list.
         if (!Loader.Plugins.Any<IPlugin<IConfig>>((Func<IPlugin<IConfig>, bool>)(p => p.Name == plugin.Name)))
         {
             Log.Info($"Loaded plugin {plugin.Name}@{plugin.Version}");

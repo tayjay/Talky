@@ -174,8 +174,20 @@ try {
     finally {
         $coreStream.Dispose()
     }
-    Assert-True ($null -ne $core.GetType('Talky.Performance.TalkyDiagnosticsSnapshot', $false)) `
-        'Embedded core diagnostics API cannot be resolved.'
+    $performanceWindowType = $core.GetType('Talky.Performance.PerformanceWindow', $false)
+    Assert-True ($null -ne $performanceWindowType) `
+        'Embedded core performance metrics API cannot be resolved.'
+    Assert-True ($null -ne $performanceWindowType.GetMethod('GetMetric')) `
+        'Embedded performance window does not expose metric snapshots.'
+    Assert-True ($null -ne $performanceWindowType.GetMethod('GetCounter')) `
+        'Embedded performance window does not expose counters.'
+
+    $configType = $core.GetType('Talky.Settings.Config', $false)
+    Assert-True ($null -ne $configType) `
+        'Embedded core configuration API cannot be resolved.'
+    $debugProperty = $configType.GetProperty('Debug')
+    Assert-True ($null -ne $debugProperty -and $debugProperty.PropertyType -eq [bool]) `
+        'Embedded configuration does not expose the debug metrics switch.'
 
     if (-not $LabApiOnly) {
         # The shim is loaded from an embedded stream and therefore has no dependency-probing base
@@ -208,8 +220,15 @@ try {
     }
 
     $pluginType = $artifact.GetType('Talky.Plugin', $true)
-    Assert-True ($null -ne $pluginType.GetMethod('TryGetDiagnosticsSnapshot')) `
-        'Shipped plugin does not expose TryGetDiagnosticsSnapshot.'
+    $performanceMonitorType = $artifact.GetType('Talky.Performance.TalkyPerformanceMonitor', $true)
+    $instanceFlags = [System.Reflection.BindingFlags]'NonPublic,Instance'
+    $logWindowDetail = $performanceMonitorType.GetMethod('LogWindowDetail', $instanceFlags)
+    Assert-True ($null -ne $logWindowDetail) `
+        'Shipped plugin does not expose debug performance-window metrics.'
+    $detailParameters = @($logWindowDetail.GetParameters())
+    Assert-True ($detailParameters.Count -eq 1 -and
+            $detailParameters[0].ParameterType.FullName -eq $performanceWindowType.FullName) `
+        'Debug performance-window metrics use an unexpected contract.'
 
     $harmonyBridge = $artifact.GetType('Talky.Bridges.HarmonyBridge', $true)
     $staticFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Static'
