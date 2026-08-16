@@ -22,17 +22,7 @@ public enum PerformanceMetric
     Governor = 10,
     ProfilerOverhead = 11,
     DirectVisibilitySync = 12,
-    DirectVisibilityActive = 13,
-    DirectRoleSyncActive = 14,
-    DirectRoleSyncRewrite = 15,
-    CedModRoleSyncActive = 16,
-    CedModPostfixRewrite = 17,
-    SettingsResponse = 18,
-    AnimationRpc = 19,
-    PendingActionDrain = 20,
-    Lifecycle = 21,
-    ConfigReload = 22,
-    Count = 23,
+    Count = 13,
 }
 
 public enum PerformanceCounter
@@ -48,60 +38,20 @@ public enum PerformanceCounter
     Rewrites = 8,
     EmotionWrites = 9,
     VoiceBytes = 10,
-    VoiceInvalidPackets = 11,
-    VoiceDecodeSuccesses = 12,
-    VoiceDecodeFailures = 13,
-    VoiceAnalysisSkips = 14,
-    VoiceBreakerActivations = 15,
-    RemoteChannelGlanceRejections = 16,
-    SettingsResponses = 17,
-    InvalidEmotionSelections = 18,
-    GrabAccepted = 19,
-    GrabDuplicate = 20,
-    GrabThrottled = 21,
-    EmotionCoalesced = 22,
-    EmotionApplied = 23,
-    AnimationRpcSends = 24,
-    AnimationRpcLogicalRecipients = 25,
-    PendingActionsQueued = 26,
-    PendingActionsCoalesced = 27,
-    PendingActionsCurrent = 28,
-    PendingActionsSamples = 29,
-    PendingActionsHighWater = 30,
-    RuntimeUpdateFailures = 31,
-    RuntimeQuarantines = 32,
-    ConfigCorrections = 33,
-    CleanupFailures = 34,
-    DirectVisibilityHooks = 35,
-    DirectRoleSyncHooks = 36,
-    CedModPrefixHooks = 37,
-    CedModPostfixHooks = 38,
-    SyncFastPathBypasses = 39,
-    LogicalSyncRecords = 40,
-    LogicalSyncRewrites = 41,
-    SyncNonFiniteOffsets = 42,
-    SyncCacheMisses = 43,
-    SyncCacheMismatches = 44,
-    AnimationRpcThrottled = 45,
-    LifecycleEnableAttempts = 46,
-    LifecycleEnableFailures = 47,
-    LifecycleDisableAttempts = 48,
-    LifecycleCleanupAttempts = 49,
-    VoicePayloadBytes1To64 = 50,
-    VoicePayloadBytes65To128 = 51,
-    VoicePayloadBytes129To256 = 52,
-    VoicePayloadBytes257To384 = 53,
-    VoicePayloadBytes385To512 = 54,
-    OwnedSubscriptionGroupsCurrent = 55,
-    SimultaneousSpeakersCurrent = 56,
-    SimultaneousSpeakersHighWater = 57,
-    FaceTicks = 58,
-    LookTicks = 59,
-    GlanceTicks = 60,
-    GlanceSelections = 61,
-    SpeechTrackersCurrent = 62,
-    LookTrackersCurrent = 63,
-    Count = 64,
+    VoiceDecodeSuccesses = 11,
+    VoiceDecodeFailures = 12,
+    RemoteChannelGlanceRejections = 13,
+    InvalidEmotionSelections = 14,
+    GrabThrottled = 15,
+    PendingActionsQueued = 16,
+    PendingActionsCoalesced = 17,
+    RuntimeUpdateFailures = 18,
+    CleanupFailures = 19,
+    FaceTicks = 20,
+    LookTicks = 21,
+    GlanceTicks = 22,
+    GlanceSelections = 23,
+    Count = 24,
 }
 
 /// <summary>
@@ -146,7 +96,6 @@ public static class PerformanceMetricCatalog
 {
     public const int VoiceSampleEvery = 8;
     public const int SyncSampleEvery = 64;
-    public const int ActiveSyncSampleEvery = 8;
 
     // Enum order is intentional and covered by a complete table test.
     private static readonly PerformanceMetricDefinition[] Definitions =
@@ -165,19 +114,6 @@ public static class PerformanceMetricCatalog
         new PerformanceMetricDefinition(false, 1, PerformanceSubsystem.Monitoring), // Governor
         new PerformanceMetricDefinition(false, 1, PerformanceSubsystem.Monitoring), // ProfilerOverhead
         new PerformanceMetricDefinition(true, SyncSampleEvery, PerformanceSubsystem.Sync), // DirectVisibilitySync
-        new PerformanceMetricDefinition(false, ActiveSyncSampleEvery, PerformanceSubsystem.None), // DirectVisibilityActive
-        new PerformanceMetricDefinition(false, ActiveSyncSampleEvery, PerformanceSubsystem.None), // DirectRoleSyncActive
-        new PerformanceMetricDefinition(false, ActiveSyncSampleEvery, PerformanceSubsystem.None), // DirectRoleSyncRewrite
-        new PerformanceMetricDefinition(false, ActiveSyncSampleEvery, PerformanceSubsystem.None), // CedModRoleSyncActive
-        new PerformanceMetricDefinition(false, ActiveSyncSampleEvery, PerformanceSubsystem.None), // CedModPostfixRewrite
-        // Server-specific settings callbacks are top-level client-driven Talky work. Attribute
-        // them to the scheduler/event subsystem; AnimationRpc remains nested to avoid counting
-        // the same response twice.
-        new PerformanceMetricDefinition(true, VoiceSampleEvery, PerformanceSubsystem.Scheduler), // SettingsResponse
-        new PerformanceMetricDefinition(false, VoiceSampleEvery, PerformanceSubsystem.None), // AnimationRpc
-        new PerformanceMetricDefinition(false, 1, PerformanceSubsystem.None), // PendingActionDrain
-        new PerformanceMetricDefinition(false, 1, PerformanceSubsystem.None), // Lifecycle
-        new PerformanceMetricDefinition(false, 1, PerformanceSubsystem.None), // ConfigReload
     };
 
     public static PerformanceMetricDefinition Get(PerformanceMetric metric)

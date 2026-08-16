@@ -483,8 +483,6 @@ public sealed class TalkyRuntime : IDisposable
             float now = Time.time;
             long schedulerStarted = monitor?.Begin(PerformanceMetric.SchedulerOverhead, 1) ??
                                     PerformanceProfiler.NotSampled;
-            long pendingStarted = monitor?.Begin(PerformanceMetric.PendingActionDrain, 1) ??
-                                  PerformanceProfiler.NotSampled;
             try
             {
                 ProcessPendingConsumables(now);
@@ -492,7 +490,6 @@ public sealed class TalkyRuntime : IDisposable
             }
             finally
             {
-                monitor?.End(PerformanceMetric.PendingActionDrain, pendingStarted);
                 monitor?.End(PerformanceMetric.SchedulerOverhead, schedulerStarted);
             }
 
