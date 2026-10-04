@@ -27,6 +27,25 @@ The managed directory must match the version pinned in `build/reference-manifest
 message if you point it at a different server install — that error means the wrong directory,
 not a broken manifest.
 
+Rider's background solution loading skips the build-time verifier so it can resolve references
+for indexing. Ordinary builds still verify dependency hashes and package contents, but accept
+the MSBuild/Roslyn version selected by the IDE. Use a toolchain that supports C# 12 and .NET
+Framework 4.8; an exact compiler version is only required for release packaging.
+
+`build/package-plugin.ps1` and `DeployValidatedPlugin` retain exact toolchain verification.
+To require that check during an ordinary build too, pass `/p:TalkyVerifyToolchain=true`.
+The verification script also checks the toolchain by default when invoked directly.
+
+If Rider still displays cached unresolved references after changing the build targets, reload
+`Talky.sln`. Its toolchain and the two directory properties above are configured under
+**Settings > Build, Execution, Deployment > Toolset and Build**.
+
+That exact pin is compile-input provenance only; it is not a runtime compatibility allowlist.
+Qualify each current game build by passing its `Assembly-CSharp.dll` to `Talky.PatchTests` and
+then running the live harness. Harmony admission uses method signatures, decoded instruction
+anchors, transactional apply/cleanup, and patch ownership; runtime MVID, IL digest, and file
+hash are diagnostic evidence only.
+
 Deployment targets:
 
 | | Directory |
@@ -52,8 +71,13 @@ Talky.Tests\bin\Release\Talky.Tests.exe
 ```
 
 A pass prints `PASS: <n> deterministic assertions.` and exits 0. Repeat for `Debug` and
-`EXILED` — the three configurations compile different code via `DefineConstants`, so a green
-Release run does not imply the other two build.
+`EXILED`. Debug has its own plugin compilation. Release is the sole production compilation;
+the EXILED solution lane copies that exact plugin, core, and shim output while still compiling
+the test and benchmark projects with their EXILED configuration.
+
+The canonical guarantee applies to `Talky.sln` and the package scripts. A direct production-
+project build such as `msbuild Talky\Talky.csproj /p:Configuration=EXILED` is a legacy,
+unsupported path and its output must not be treated as a release artifact.
 
 Some tests are order-coupled to enum layout. `PerformanceMetric` /
 `PerformanceMetricCatalog.Definitions` and the three positional arrays in
@@ -64,7 +88,8 @@ the guard that tells you when they drift apart.
 
 ## Server verification
 
-Both configurations produce **`Talky.dll`**. They differ by destination, not file name.
+Both production lanes use the same **`Talky.dll`** bytes. Release is built once and copied to
+the EXILED output directory; only the deployment destination differs.
 
 > **Deploy one at a time.** Talky's constructor throws `DuplicateNameException` if it finds a
 > second assembly declaring the same plugin type. Leaving a copy in the LabAPI folder while

@@ -143,13 +143,6 @@ public sealed class TalkyRuntime : IDisposable
         _pendingEmotions.Clear();
         _duePendingKeys.Clear();
         _activeLookTargets.Clear();
-        try
-        {
-        }
-        catch (Exception exception)
-        {
-            firstFailure ??= exception;
-        }
         ResetFaultDiagnostics();
 
         if (firstFailure != null)
@@ -168,10 +161,6 @@ public sealed class TalkyRuntime : IDisposable
     public void ApplyPolicy(TalkyRuntimePolicy policy)
     {
         TalkyRuntimePolicy next = policy ?? TalkyRuntimePolicy.FromConfig(Plugin.Instance?.Config);
-        bool headMotionDisabled = _policy == null ||
-                                  (_policy.EnableHeadMotion && !next.EnableHeadMotion);
-        bool glancingDisabled = _policy == null ||
-                                (_policy.EnableGlancing && !next.EnableGlancing);
         _policy = next;
         ResetDeadlines(Time.time);
 
@@ -187,9 +176,9 @@ public sealed class TalkyRuntime : IDisposable
             if (look == null)
                 continue;
 
-            if (headMotionDisabled || !next.EnableHeadMotion)
+            if (!next.EnableHeadMotion)
                 look.ClearOffsets();
-            else if (glancingDisabled || !next.EnableGlancing)
+            else if (!next.EnableGlancing)
                 look.ClearGlanceOffset();
 
             RefreshLookActivity(look);
@@ -439,6 +428,19 @@ public sealed class TalkyRuntime : IDisposable
             _activeLookTargets.Remove(networkId);
     }
 
+    private void ExpirePendingLookCorrections(int currentFrame)
+    {
+        if (_activeLookTargets.Count == 0)
+            return;
+
+        for (int i = 0; i < _lookOverrides.Count; i++)
+        {
+            LookOverride look = _lookOverrides[i];
+            if (look != null && look.TryExpireZeroCorrection(currentFrame))
+                RefreshLookActivity(look);
+        }
+    }
+
     public void RecordEmotionWrite()
     {
         _emotionWrites++;
@@ -471,7 +473,8 @@ public sealed class TalkyRuntime : IDisposable
             return;
 
         TalkyPerformanceMonitor monitor = Plugin.Instance?.PerformanceMonitor;
-        long glanceStarted = PerformanceProfiler.NotSampled;
+        bool glanceEvaluated = false;
+        long glanceDurationTicks = 0L;
         bool updateFailed = false;
         try
         {
@@ -482,6 +485,8 @@ public sealed class TalkyRuntime : IDisposable
             {
                 ProcessPendingConsumables(now);
                 ProcessPendingEmotions(now);
+                if (!_policy.EnableHeadMotion)
+                    ExpirePendingLookCorrections(Time.frameCount);
             }
             finally
             {
@@ -530,8 +535,7 @@ public sealed class TalkyRuntime : IDisposable
             bool evaluateGlance = lookDue && _policy.EnableGlancing && _glancePending;
             if (evaluateGlance)
             {
-                glanceStarted = monitor?.Begin(PerformanceMetric.GlanceBatch, 1) ??
-                                PerformanceProfiler.NotSampled;
+                glanceEvaluated = true;
                 _glancePending = false;
             }
 
@@ -587,7 +591,10 @@ public sealed class TalkyRuntime : IDisposable
                             deltaTime,
                             _recentSpeakers,
                             evaluateGlance,
-                            _policy);
+                            _policy,
+                            monitor?.IsDurationRecordingEnabled == true,
+                            out long lookGlanceDurationTicks);
+                        glanceDurationTicks += lookGlanceDurationTicks;
                         RefreshLookActivity(look);
                         _lookTicks++;
                         lookTicks++;
@@ -625,7 +632,8 @@ public sealed class TalkyRuntime : IDisposable
         {
             try
             {
-                monitor?.End(PerformanceMetric.GlanceBatch, glanceStarted);
+                if (glanceEvaluated)
+                    monitor?.RecordDurationTicks(PerformanceMetric.GlanceBatch, glanceDurationTicks);
                 CompleteFrameMonitoring(monitor);
             }
             catch (Exception exception)

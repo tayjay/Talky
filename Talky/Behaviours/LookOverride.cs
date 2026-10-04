@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using Stopwatch = System.Diagnostics.Stopwatch;
 using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
+using Talky.Performance;
 using Talky.Runtime;
 using Talky.Settings;
 using UnityEngine;
@@ -18,9 +20,14 @@ public sealed class LookOverride : MonoBehaviour
     private Vector2 _headBobOffset;
     private Vector2 _glanceOffset;
     private Vector2 _reactOffset;
+    private FpcMouseLook _serializedMouseLook;
+    private FirstPersonMovementModule _serializedMovement;
     private float _lastBusyTime;
+    private int _zeroCorrectionArmedFrame = -1;
     private bool _disposed;
     private bool _glanceSelectedOnLastTick;
+    private bool _zeroCorrectionPending;
+    private bool _zeroCorrectionObserved;
 
     internal int RuntimeIndex { get; set; } = -1;
     internal bool IsDisposed => _disposed;
@@ -49,6 +56,100 @@ public sealed class LookOverride : MonoBehaviour
     public bool HasActiveOffsets =>
         NextLookOffset != Vector2.zero || LastLookOffset != Vector2.zero;
 
+    /// <summary>
+    /// Produces a look object used only while constructing outbound sync data.
+    /// The authoritative movement module's mouse-look state is never modified.
+    /// </summary>
+    internal FpcMouseLook GetSerializedMouseLook(
+        FpcMouseLook liveMouseLook,
+        FirstPersonMovementModule movement,
+        Vector2 offset,
+        out bool allocated)
+    {
+        allocated = false;
+        if (_disposed || liveMouseLook == null || movement == null)
+        {
+            return liveMouseLook;
+        }
+
+        ReferenceHub hub = Hub;
+        if (hub == null || hub.isLocalPlayer)
+            return liveMouseLook;
+
+        float horizontal = liveMouseLook.CurrentHorizontal + offset.x;
+        float vertical = liveMouseLook.CurrentVertical + offset.y;
+        if (float.IsNaN(horizontal) || float.IsInfinity(horizontal) ||
+            float.IsNaN(vertical) || float.IsInfinity(vertical))
+        {
+            return liveMouseLook;
+        }
+
+        if (_serializedMouseLook == null ||
+            !ReferenceEquals(_serializedMovement, movement))
+        {
+            _serializedMouseLook = new FpcMouseLook(hub, movement);
+            _serializedMovement = movement;
+            allocated = true;
+        }
+
+        _serializedMouseLook.CurrentHorizontal = horizontal;
+        _serializedMouseLook.CurrentVertical = vertical;
+        return _serializedMouseLook;
+    }
+
+    /// <summary>
+    /// Records that the pending zero correction reached an outbound sync path.
+    /// Clearing remains deferred to a later look tick so the current fanout can
+    /// present the correction to every receiver.
+    /// </summary>
+    internal void MarkZeroCorrectionObserved()
+    {
+        if (!_disposed &&
+            _zeroCorrectionPending &&
+            NextLookOffset == Vector2.zero &&
+            LastLookOffset != Vector2.zero)
+        {
+            _zeroCorrectionObserved = true;
+        }
+    }
+
+    /// <summary>
+    /// Returns the current presentation offsets, expiring an observed or bounded
+    /// zero correction even when ordinary look ticking is disabled by policy.
+    /// </summary>
+    internal bool TryGetSerializedLookOffsets(
+        int currentFrame,
+        out Vector2 nextOffset,
+        out Vector2 previousOffset)
+    {
+        TryExpireZeroCorrection(currentFrame);
+
+        nextOffset = NextLookOffset;
+        previousOffset = LastLookOffset;
+        return !_disposed &&
+               (nextOffset != Vector2.zero || previousOffset != Vector2.zero);
+    }
+
+    /// <summary>
+    /// Expires a bounded return-to-zero marker independently of outbound fanout.
+    /// This prevents excluded-only targets from remaining active when head ticking
+    /// is disabled by the performance policy.
+    /// </summary>
+    internal bool TryExpireZeroCorrection(int currentFrame)
+    {
+        if (!_zeroCorrectionPending ||
+            ShouldRetainZeroCorrection(
+                _zeroCorrectionObserved,
+                _zeroCorrectionArmedFrame,
+                currentFrame))
+        {
+            return false;
+        }
+
+        HardResetLookOffsets();
+        return true;
+    }
+
     private static Config TalkyConfig => Plugin.Instance?.Config;
 
     private void Awake()
@@ -64,6 +165,7 @@ public sealed class LookOverride : MonoBehaviour
 
         _player = player;
         _disposed = false;
+        ClearSerializedMouseLook();
         ClearOffsets(false);
         _lastBusyTime = Time.time;
         LastManualLookTime = Time.time;
@@ -76,6 +178,7 @@ public sealed class LookOverride : MonoBehaviour
 
     internal void OnSpawned(float now)
     {
+        ClearSerializedMouseLook();
         ClearOffsets(false);
         _lastBusyTime = now;
         LastManualLookTime = now;
@@ -91,11 +194,43 @@ public sealed class LookOverride : MonoBehaviour
         bool calculateGlance,
         TalkyRuntimePolicy policy)
     {
+        return TickLook(
+            now,
+            deltaTime,
+            recentSpeakers,
+            calculateGlance,
+            policy,
+            false,
+            out _);
+    }
+
+    internal int TickLook(
+        float now,
+        float deltaTime,
+        List<SpeechTracker> recentSpeakers,
+        bool calculateGlance,
+        TalkyRuntimePolicy policy,
+        bool measureGlance,
+        out long glanceDurationTicks)
+    {
+        glanceDurationTicks = 0L;
         _glanceSelectedOnLastTick = false;
         if (_disposed || _player == null || policy == null)
             return 0;
 
+        if (_zeroCorrectionPending)
+        {
+            if (!TryExpireZeroCorrection(Time.frameCount))
+                return 0;
+        }
+
         if (!policy.EnableHeadMotion)
+        {
+            ClearOffsets();
+            return 0;
+        }
+
+        if (!(_player.RoleBase is IFpcRole role))
         {
             ClearOffsets();
             return 0;
@@ -112,8 +247,12 @@ public sealed class LookOverride : MonoBehaviour
             return 0;
         }
 
-        if (_player.RoleBase is IFpcRole role && role.FpcModule.Motor.RotationDetected)
+        if (role.FpcModule.Motor.RotationDetected)
         {
+            Plugin.Instance?.PerformanceMonitor?.Count(
+                PerformanceCounter.ManualLookDetections);
+            Plugin.Instance?.PerformanceMonitor?.Count(
+                PerformanceCounter.ManualLookSuppressedTicks);
             LastManualLookTime = now;
             ClearOffsets();
             return 0;
@@ -121,6 +260,8 @@ public sealed class LookOverride : MonoBehaviour
 
         if (now - LastManualLookTime < 1f)
         {
+            Plugin.Instance?.PerformanceMonitor?.Count(
+                PerformanceCounter.ManualLookSuppressedTicks);
             ClearOffsets();
             return 0;
         }
@@ -137,7 +278,22 @@ public sealed class LookOverride : MonoBehaviour
         else if (calculateGlance)
         {
             _glanceOffset = Vector2.zero;
-            glanceCandidates = CalculateGlanceLook(recentSpeakers, now);
+            if (measureGlance)
+            {
+                long glanceStarted = Stopwatch.GetTimestamp();
+                try
+                {
+                    glanceCandidates = CalculateGlanceLook(recentSpeakers, now);
+                }
+                finally
+                {
+                    glanceDurationTicks = Stopwatch.GetTimestamp() - glanceStarted;
+                }
+            }
+            else
+            {
+                glanceCandidates = CalculateGlanceLook(recentSpeakers, now);
+            }
         }
 
         Vector2 goal = GetLookGoal();
@@ -147,11 +303,15 @@ public sealed class LookOverride : MonoBehaviour
             goal,
             Mathf.Clamp01(Mathf.Max(0f, deltaTime) * 7f));
 
-        // Snap idle offsets to zero so inactive targets can be removed.
+        // Present zero while retaining the previously serialized offset for one
+        // fanout. The next eligible look tick removes the correction marker.
         if (goal == Vector2.zero && NextLookOffset.sqrMagnitude <= 0.0001f)
         {
-            LastLookOffset = Vector2.zero;
             NextLookOffset = Vector2.zero;
+            if (IsFinite(LastLookOffset) && LastLookOffset != Vector2.zero)
+                ArmZeroCorrection(LastLookOffset);
+            else
+                ClearZeroCorrectionTracking();
         }
 
         return glanceCandidates;
@@ -177,14 +337,24 @@ public sealed class LookOverride : MonoBehaviour
         if (_glanceOffset == Vector2.zero)
             return;
 
+        Vector2 previousOffset = CurrentCorrectionSource();
         _glanceOffset = Vector2.zero;
-        LastLookOffset = NextLookOffset;
+        ClearZeroCorrectionTracking();
+        LastLookOffset = previousOffset;
         NextLookOffset = GetLookGoal();
+        if (NextLookOffset == Vector2.zero &&
+            IsFinite(previousOffset) &&
+            previousOffset != Vector2.zero)
+        {
+            ArmZeroCorrection(previousOffset);
+        }
+
         Plugin.Instance?.Runtime?.RefreshLookActivity(this);
     }
 
     internal void Reset()
     {
+        ClearSerializedMouseLook();
         ClearOffsets(false);
         _lastBusyTime = Time.time;
         LastManualLookTime = Time.time;
@@ -205,6 +375,7 @@ public sealed class LookOverride : MonoBehaviour
         {
             RuntimeIndex = -1;
             _speechTracker = null;
+            ClearSerializedMouseLook();
         }
     }
 
@@ -215,14 +386,79 @@ public sealed class LookOverride : MonoBehaviour
 
     private void ClearOffsets(bool notifyRuntime)
     {
+        Vector2 correctionSource = CurrentCorrectionSource();
+        bool preservePendingCorrection =
+            notifyRuntime &&
+            _zeroCorrectionPending &&
+            NextLookOffset == Vector2.zero &&
+            IsFinite(LastLookOffset) &&
+            LastLookOffset != Vector2.zero;
+
         _headBobOffset = Vector2.zero;
         _glanceOffset = Vector2.zero;
         _reactOffset = Vector2.zero;
-        LastLookOffset = Vector2.zero;
-        NextLookOffset = Vector2.zero;
+
+        if (!notifyRuntime)
+        {
+            HardResetLookOffsets();
+        }
+        else if (!preservePendingCorrection)
+        {
+            if (IsFinite(correctionSource) && correctionSource != Vector2.zero)
+                ArmZeroCorrection(correctionSource);
+            else
+                HardResetLookOffsets();
+        }
 
         if (notifyRuntime)
             Plugin.Instance?.Runtime?.RefreshLookActivity(this);
+    }
+
+    private Vector2 CurrentCorrectionSource() =>
+        NextLookOffset != Vector2.zero ? NextLookOffset : LastLookOffset;
+
+    private void ArmZeroCorrection(Vector2 previousOffset)
+    {
+        LastLookOffset = previousOffset;
+        NextLookOffset = Vector2.zero;
+        _zeroCorrectionPending = true;
+        _zeroCorrectionObserved = false;
+        _zeroCorrectionArmedFrame = Time.frameCount;
+    }
+
+    private void HardResetLookOffsets()
+    {
+        LastLookOffset = Vector2.zero;
+        NextLookOffset = Vector2.zero;
+        ClearZeroCorrectionTracking();
+    }
+
+    private void ClearZeroCorrectionTracking()
+    {
+        _zeroCorrectionPending = false;
+        _zeroCorrectionObserved = false;
+        _zeroCorrectionArmedFrame = -1;
+    }
+
+    internal static bool ShouldRetainZeroCorrection(
+        bool observed,
+        int armedFrame,
+        int currentFrame)
+    {
+        uint frameAge = unchecked((uint)(currentFrame - armedFrame));
+        return frameAge <= 1u && (!observed || frameAge == 0u);
+    }
+
+    private static bool IsFinite(Vector2 value) =>
+        !float.IsNaN(value.x) &&
+        !float.IsInfinity(value.x) &&
+        !float.IsNaN(value.y) &&
+        !float.IsInfinity(value.y);
+
+    private void ClearSerializedMouseLook()
+    {
+        _serializedMouseLook = null;
+        _serializedMovement = null;
     }
 
     private void CalculateSpeechHeadBob(float now)
@@ -238,7 +474,7 @@ public sealed class LookOverride : MonoBehaviour
 
         _headBobOffset = new Vector2(
             0f,
-            (tracker.CurrentVolumeRatio - 0.25f) * config.HeadBobAmount);
+            tracker.CurrentHeadBobDrive * config.HeadBobAmount);
     }
 
     private int CalculateGlanceLook(List<SpeechTracker> recentSpeakers, float now)

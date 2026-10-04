@@ -20,11 +20,13 @@ internal static class RollingSpeechPercentilesTests
         TestReferenceEquivalenceAcrossWraps();
         TestObservationCadence();
         TestMinimumAnimationSpan();
+        TestHeadBobDriveContract();
         TestBriefLoudBurstAgainstModerateHistory();
         TestSustainedLoudMovesUpperPercentile();
         TestSustainedWhisperMovesPercentiles();
         TestQuantizedFaceComparisons();
         TestFractionalActivityFloorComparisons();
+        TestMeanSquareActivityFloorComparisons();
         TestHotMicNoiseThenWhisper();
         TestHotMicPcmTransition();
         TestAudibleSpeechActivity();
@@ -159,6 +161,34 @@ internal static class RollingSpeechPercentilesTests
             Equal(SpeechAnimationLevel.Loud, loud.Level, "Brief loud volume animates at loud level");
             Near(1d, loud.VolumeRatio, 0d, "Brief loud volume reaches full head bob");
         }
+    }
+
+    private static void TestHeadBobDriveContract()
+    {
+        SpeechAnimationDecision silent = new SpeechAnimationDecision(
+            SpeechAnimationLevel.Silent,
+            0f);
+        Near(0d, silent.HeadBobDrive, 0d, "Silent animation has zero head-bob drive");
+
+        SpeechAnimationDecision minimumAdaptive = new SpeechAnimationDecision(
+            SpeechAnimationLevel.Quiet,
+            0.15f);
+        Near(-0.10d, minimumAdaptive.HeadBobDrive, 0.000001d, "Adaptive floor preserves quiet signed drive");
+
+        SpeechAnimationDecision neutral = new SpeechAnimationDecision(
+            SpeechAnimationLevel.Quiet,
+            SpeechAnimationMath.HeadBobNeutralVolumeRatio);
+        Near(0d, neutral.HeadBobDrive, 0d, "Neutral ratio has zero head-bob drive");
+
+        SpeechAnimationDecision full = new SpeechAnimationDecision(
+            SpeechAnimationLevel.Loud,
+            1f);
+        Near(0.75d, full.HeadBobDrive, 0d, "Full volume preserves maximum head-bob drive");
+        Near(
+            0d,
+            SpeechAnimationMath.CalculateHeadBobDrive(float.NaN),
+            0d,
+            "Invalid volume cannot create head-bob drive");
     }
 
     private static void TestSustainedLoudMovesUpperPercentile()
@@ -380,6 +410,48 @@ internal static class RollingSpeechPercentilesTests
         Near(-1d, activity.LastAudibleSeconds, 0d, "Audible activity reset clears timestamp");
     }
 
+    private static void TestMeanSquareActivityFloorComparisons()
+    {
+        double[] floors = { -96d, -90d, -80d, -70d, -30d, 0d };
+        double[] factors = { 0.999999999999d, 1d, 1.000000000001d };
+        for (int floorIndex = 0; floorIndex < floors.Length; floorIndex++)
+        {
+            double floor = floors[floorIndex];
+            double floorMeanSquare = SpeechAnimationMath.MeanSquareFromDecibels(floor);
+            for (int factorIndex = 0; factorIndex < factors.Length; factorIndex++)
+            {
+                double meanSquare = floorMeanSquare * factors[factorIndex];
+                double decibels = meanSquare > 0d
+                    ? 10d * Math.Log10(meanSquare)
+                    : double.NegativeInfinity;
+                bool legacy = SpeechAnimationMath.IsAtOrAboveActivityFloor(
+                    decibels,
+                    floor);
+                bool direct = SpeechAnimationMath.IsMeanSquareAtOrAboveActivityFloor(
+                    meanSquare,
+                    floorMeanSquare);
+                True(
+                    legacy == direct,
+                    "Mean-square floor matches dB comparison floor=" + floor +
+                    " factor=" + factors[factorIndex]);
+            }
+        }
+
+        True(
+            !SpeechAnimationMath.IsMeanSquareAtOrAboveActivityFloor(
+                double.NaN,
+                0.1d),
+            "Mean-square floor rejects NaN energy");
+        True(
+            !SpeechAnimationMath.IsMeanSquareAtOrAboveActivityFloor(
+                -0.1d,
+                0.1d),
+            "Mean-square floor rejects negative energy");
+        True(
+            double.IsNaN(SpeechAnimationMath.MeanSquareFromDecibels(double.NaN)),
+            "Mean-square conversion rejects invalid dB");
+    }
+
     private static void TestDefaultWhisperAdaptationBoundaries()
     {
         RollingSpeechPercentiles percentiles = new RollingSpeechPercentiles();
@@ -511,6 +583,21 @@ internal static class RollingSpeechPercentilesTests
         presentation.TryPresent(480, 0.5d, 13d);
         True(!presentation.HasAdaptiveRange, "Fallback presentation clears old adaptive range");
         True(!presentation.HasPercentileRange, "Fallback presentation clears old percentiles");
+
+        True(
+            presentation.TryPresentMeanSquare(
+                480,
+                0.0625d,
+                -55d,
+                -35d,
+                -60d,
+                -30d,
+                14d),
+            "Adaptive mean-square presentation accepts decoded voice");
+        Near(0.0625d, presentation.MeanSquare, 0d, "Adaptive presentation carries mean square");
+        Near(0.25d, presentation.RootMeanSquare, 0d, "Adaptive mean-square presentation derives RMS");
+        True(presentation.HasAdaptiveRange, "Mean-square presentation carries adaptive range");
+        True(presentation.HasPercentileRange, "Mean-square presentation carries percentiles");
 
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 10000; i++)
@@ -673,9 +760,7 @@ internal static class RollingSpeechPercentilesTests
             currentDecibels,
             activityFloor);
         SpeechAnimationDecision decision = EvaluateCurrentAnimation(currentDecibels, percentiles);
-        double headBobTarget = decision.VolumeRatio > 0f
-            ? (decision.VolumeRatio - 0.25d) * 10d
-            : 0d;
+        double headBobTarget = decision.HeadBobDrive * 10d;
         writer.WriteLine(
             string.Join(
                 ",",

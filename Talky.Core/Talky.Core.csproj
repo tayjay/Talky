@@ -21,7 +21,7 @@
         <OutputPath>bin\Debug\</OutputPath>
         <DefineConstants>DEBUG;TRACE</DefineConstants>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
         <PlatformTarget>x64</PlatformTarget>
@@ -30,7 +30,7 @@
         <OutputPath>bin\Release\</OutputPath>
         <DefineConstants>TRACE</DefineConstants>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     </PropertyGroup>
     <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'EXILED|x64' ">
         <PlatformTarget>x64</PlatformTarget>
@@ -39,7 +39,7 @@
         <OutputPath>bin\EXILED\</OutputPath>
         <DefineConstants>EXILED;TRACE</DefineConstants>
         <WarningLevel>4</WarningLevel>
-        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     </PropertyGroup>
     <ItemGroup>
         <Reference Include="System"/>
@@ -48,6 +48,7 @@
     <ItemGroup>
         <Compile Include="Compatibility\CedModCompatibilityPolicy.cs" />
         <Compile Include="Compatibility\CedModRewritePolicy.cs" />
+        <Compile Include="Compatibility\LookSyncSelectionPolicy.cs" />
         <Compile Include="Performance\AdaptivePerformanceGovernor.cs" />
         <Compile Include="Performance\EffectivePerformancePolicy.cs" />
         <Compile Include="Performance\PerformanceConfig.cs" />
@@ -64,4 +65,5 @@
         <Compile Include="Voice\VoicePresentationState.cs" />
     </ItemGroup>
     <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets"/>
+    <Import Project="..\build\Talky.Canonical.targets"/>
 </Project>

@@ -1,3 +1,5 @@
+using System;
+
 namespace Talky.Voice;
 
 /// <summary>
@@ -5,14 +7,29 @@ namespace Talky.Voice;
 /// </summary>
 public sealed class VoicePresentationState
 {
+    private double _meanSquare;
     private double _rootMeanSquare;
+    private bool _rootMeanSquareIsCurrent = true;
     private double _lastActivitySeconds = -1d;
     private double _percentileLowDecibels = double.NaN;
     private double _percentileHighDecibels = double.NaN;
     private double _animationLowDecibels = double.NaN;
     private double _animationHighDecibels = double.NaN;
 
-    public double RootMeanSquare => _rootMeanSquare;
+    public double MeanSquare => _meanSquare;
+    public double RootMeanSquare
+    {
+        get
+        {
+            if (!_rootMeanSquareIsCurrent)
+            {
+                _rootMeanSquare = Math.Sqrt(_meanSquare);
+                _rootMeanSquareIsCurrent = true;
+            }
+
+            return _rootMeanSquare;
+        }
+    }
     public double LastActivitySeconds => _lastActivitySeconds;
     public bool HasPercentileRange =>
         IsFinite(_percentileLowDecibels) &&
@@ -68,7 +85,84 @@ public sealed class VoicePresentationState
         if (decodedSampleCount <= 0)
             return false;
 
+        _meanSquare = rootMeanSquare * rootMeanSquare;
         _rootMeanSquare = rootMeanSquare;
+        _rootMeanSquareIsCurrent = true;
+        StoreRanges(
+            percentileLowDecibels,
+            percentileHighDecibels,
+            animationLowDecibels,
+            animationHighDecibels);
+        _lastActivitySeconds = activitySeconds;
+        return true;
+    }
+
+    public bool TryPresentMeanSquare(
+        int decodedSampleCount,
+        double meanSquare,
+        double activitySeconds)
+    {
+        return TryPresentMeanSquare(
+            decodedSampleCount,
+            meanSquare,
+            double.NaN,
+            double.NaN,
+            double.NaN,
+            double.NaN,
+            activitySeconds);
+    }
+
+    public bool TryPresentMeanSquare(
+        int decodedSampleCount,
+        double meanSquare,
+        double animationLowDecibels,
+        double animationHighDecibels,
+        double activitySeconds)
+    {
+        return TryPresentMeanSquare(
+            decodedSampleCount,
+            meanSquare,
+            double.NaN,
+            double.NaN,
+            animationLowDecibels,
+            animationHighDecibels,
+            activitySeconds);
+    }
+
+    public bool TryPresentMeanSquare(
+        int decodedSampleCount,
+        double meanSquare,
+        double percentileLowDecibels,
+        double percentileHighDecibels,
+        double animationLowDecibels,
+        double animationHighDecibels,
+        double activitySeconds)
+    {
+        if (decodedSampleCount <= 0 ||
+            !IsFinite(meanSquare) ||
+            meanSquare < 0d)
+        {
+            return false;
+        }
+
+        _meanSquare = meanSquare;
+        _rootMeanSquare = 0d;
+        _rootMeanSquareIsCurrent = meanSquare == 0d;
+        StoreRanges(
+            percentileLowDecibels,
+            percentileHighDecibels,
+            animationLowDecibels,
+            animationHighDecibels);
+        _lastActivitySeconds = activitySeconds;
+        return true;
+    }
+
+    private void StoreRanges(
+        double percentileLowDecibels,
+        double percentileHighDecibels,
+        double animationLowDecibels,
+        double animationHighDecibels)
+    {
         if (IsFinite(percentileLowDecibels) &&
             IsFinite(percentileHighDecibels) &&
             percentileHighDecibels > percentileLowDecibels)
@@ -94,9 +188,6 @@ public sealed class VoicePresentationState
             _animationLowDecibels = double.NaN;
             _animationHighDecibels = double.NaN;
         }
-
-        _lastActivitySeconds = activitySeconds;
-        return true;
     }
 
     public void SetLastActivitySeconds(double activitySeconds)
@@ -112,7 +203,9 @@ public sealed class VoicePresentationState
 
     public void Reset()
     {
+        _meanSquare = 0d;
         _rootMeanSquare = 0d;
+        _rootMeanSquareIsCurrent = true;
         _lastActivitySeconds = -1d;
         _percentileLowDecibels = double.NaN;
         _percentileHighDecibels = double.NaN;

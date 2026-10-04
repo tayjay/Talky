@@ -238,6 +238,15 @@ public sealed class PerformanceSummaryAccumulator
             $"look_ticks={GetCounter(PerformanceCounter.LookTicks)}, " +
             $"glance_ticks={GetCounter(PerformanceCounter.GlanceTicks)}, " +
             $"glance_selections={GetCounter(PerformanceCounter.GlanceSelections)}, " +
+            $"look_selector_calls={GetCounter(PerformanceCounter.LookSelectorCalls)}, " +
+            $"look_selector_pass_throughs=" +
+            $"{GetCounter(PerformanceCounter.LookSelectorPassThroughs)}, " +
+            $"look_selector_rewrites=" +
+            $"{GetCounter(PerformanceCounter.LookSelectorRewrites)}, " +
+            $"look_selector_scratch_allocations=" +
+            $"{GetCounter(PerformanceCounter.LookSelectorScratchAllocations)}, " +
+            $"look_selector_failures=" +
+            $"{GetCounter(PerformanceCounter.LookSelectorFailures)}, " +
             $"runtime_update_failures=" +
             $"{GetCounter(PerformanceCounter.RuntimeUpdateFailures)}.";
     }

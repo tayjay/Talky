@@ -92,7 +92,7 @@ public sealed class AdaptivePerformanceGovernor
     private double _lastTransitionAt;
     private int _softBreachWindows;
     private int _serverEmergencyWindows;
-    private int _healthySeconds;
+    private double _healthySeconds;
     private bool _lastTransitionWasRecovery;
     private bool _recoveryProbeActive;
     private PerformanceTier _recoveryProbeSourceTier;
@@ -250,8 +250,8 @@ public sealed class AdaptivePerformanceGovernor
             return Decision(previous, GovernorReason.None);
         }
 
-        _healthySeconds += _config.EvaluationWindowSeconds;
-        int requiredHealthySeconds = _lastTransitionWasRecovery
+        _healthySeconds += SampleDurationSeconds(sample);
+        double requiredHealthySeconds = _lastTransitionWasRecovery
             ? _config.RecoveryCooldownSeconds
             : _config.RecoveryHealthySeconds;
         if (_healthySeconds < requiredHealthySeconds)
@@ -436,6 +436,6 @@ public sealed class AdaptivePerformanceGovernor
     {
         _softBreachWindows = 0;
         _serverEmergencyWindows = 0;
-        _healthySeconds = 0;
+        _healthySeconds = 0d;
     }
 }

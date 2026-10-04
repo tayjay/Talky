@@ -25,6 +25,8 @@ public class Plugin : Plugin<Config>
     public SSTalkySettings Settings;
     public TalkyRuntime Runtime { get; private set; }
     public TalkyPerformanceMonitor PerformanceMonitor { get; private set; }
+    public CedModLookSyncMode LookSyncMode { get; private set; } = CedModLookSyncMode.StockSync;
+    public string LookSyncPatchDetail { get; private set; } = "not initialized";
     public static Plugin Instance { get; private set; }
 
     private CoroutineHandle _postEnableHandle;
@@ -32,6 +34,10 @@ public class Plugin : Plugin<Config>
     private bool _enabled;
     private bool _fullyEnabled;
     private bool _pluginsEnabledSubscribed;
+    private bool _appliedPreferHarmonyLookSync;
+    private CedModPluginState _appliedCedModState = CedModPluginState.Unreadable;
+    private CedModCompatibilityReason _appliedCedModReason =
+        CedModCompatibilityReason.ConfigurationUnreadable;
 
     // Uses the EXILED lifecycle path, which runs post-load setup without waiting for LabAPI's load event.
     internal bool ExiledNativeMode;
@@ -46,14 +52,15 @@ public class Plugin : Plugin<Config>
 
         Plugin previous = Instance;
         if (previous != null &&
-            (previous._enabled || previous._fullyEnabled ||
-             previous.HasOwnedLifecycleState()))
+            previous.HasOwnedNonHarmonyLifecycleState())
         {
             throw new InvalidOperationException(
                 "A previous Talky plugin instance still owns runtime state, subscriptions, " +
-                "settings, coroutines, or Harmony patches. Its Disable() must complete before " +
+                "settings, or coroutines. Its Disable() must complete before " +
                 "another instance can be constructed.");
         }
+
+        CleanupOrphanedHarmonyOwnership();
 
         Instance = this;
         WireExiledBridge();
@@ -80,6 +87,9 @@ public class Plugin : Plugin<Config>
     {
         if (_enabled)
             return;
+
+        if (!HasOwnedNonHarmonyLifecycleState())
+            CleanupOrphanedHarmonyOwnership();
 
         if (HasOwnedLifecycleState())
         {
@@ -190,7 +200,13 @@ public class Plugin : Plugin<Config>
             FakeLookHandler = null;
         }
 
-        TryCleanup("remove the CedMod sync patch", RemoveCedModPatchIfPresent);
+        bool patchCleanupSucceeded = TryCleanup(
+            "remove the look-sync Harmony patch",
+            RemoveLookSyncPatchesIfPresent);
+        LookSyncMode = CedModLookSyncMode.CedModUnsupported;
+        LookSyncPatchDetail = patchCleanupSucceeded
+            ? "disabled; Talky Harmony ownership removed"
+            : "disable cleanup failed; possible Talky Harmony ownership retained";
 
         if (runtime != null &&
             TryCleanup("dispose the Talky runtime", runtime.Dispose))
@@ -241,21 +257,52 @@ public class Plugin : Plugin<Config>
         }
     }
 
-    private static void RemoveCedModPatchIfPresent()
+    private static void RemoveLookSyncPatchesIfPresent()
     {
         if (HarmonyBridge.HarmonyPresent() || HarmonyBridge.HasOwnedPatchState())
             HarmonyBridge.RemovePatches();
     }
 
-    private bool HasOwnedLifecycleState(bool includePerformanceMonitor = true)
+    private static void CleanupOrphanedHarmonyOwnership()
     {
-        return _pluginsEnabledSubscribed ||
+        if (!HarmonyBridge.HasOwnedPatchState())
+            return;
+
+        try
+        {
+            HarmonyBridge.RemovePatches();
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                "Talky found prior Harmony ownership and could not remove it safely. " +
+                "Restart the server or resolve the Harmony cleanup failure before enabling.",
+                exception);
+        }
+
+        if (HarmonyBridge.HasOwnedPatchState())
+        {
+            throw new InvalidOperationException(
+                "Talky still detects prior Harmony ownership after owner-scoped cleanup.");
+        }
+    }
+
+    private bool HasOwnedNonHarmonyLifecycleState(bool includePerformanceMonitor = true)
+    {
+        return _enabled ||
+               _fullyEnabled ||
+               _pluginsEnabledSubscribed ||
                _postEnableHandle.IsValid ||
                Runtime != null ||
                VoiceChattingHandler != null ||
                FakeLookHandler != null ||
                Settings != null ||
-               (includePerformanceMonitor && PerformanceMonitor != null) ||
+               (includePerformanceMonitor && PerformanceMonitor != null);
+    }
+
+    private bool HasOwnedLifecycleState(bool includePerformanceMonitor = true)
+    {
+        return HasOwnedNonHarmonyLifecycleState(includePerformanceMonitor) ||
                HarmonyBridge.HasOwnedPatchState();
     }
 
@@ -312,42 +359,54 @@ public class Plugin : Plugin<Config>
             CedModSelection selection = CedModCompatibilityPolicy.Select(
                 labApiProbe.State,
                 exiledProbe.State);
+            _appliedCedModState = selection.State;
+            _appliedCedModReason = selection.Reason;
 
+            bool preferHarmonyLookSync = Config.PreferHarmonyLookSync;
             bool patchApplied = false;
-            string patchDetail = "CedMod helper patch not required";
-            if (selection.State == CedModPluginState.FakeSync)
+            string patchDetail;
+            if (!preferHarmonyLookSync)
+            {
+                RemoveLookSyncPatchesIfPresent();
+                patchDetail = "disabled by prefer_harmony_look_sync=false";
+            }
+            else if (selection.State == CedModPluginState.FakeSync)
             {
                 CedModRuntimeProbe selectedProbe =
                     labApiProbe.State == CedModPluginState.FakeSync
                         ? labApiProbe
                         : exiledProbe;
-                if (!HarmonyBridge.HarmonyPresent())
-                {
-                    patchDetail = "0Harmony is not loaded";
-                }
-                else
-                {
-                    patchApplied = HarmonyBridge.ApplyPatches(
-                        selectedProbe.Assembly,
-                        out patchDetail);
-                    if (!patchApplied && HarmonyBridge.HasOwnedPatchState())
-                    {
-                        throw new InvalidOperationException(
-                            "Talky cannot continue while a failed CedMod patch attempt " +
-                            "retains possible Harmony ownership.");
-                    }
-                }
+                patchApplied = HarmonyBridge.ApplyCedModPatches(
+                    selectedProbe.Assembly,
+                    out patchDetail);
+            }
+            else if (selection.State == CedModPluginState.NotPresent ||
+                     selection.State == CedModPluginState.StockSync)
+            {
+                patchApplied = HarmonyBridge.ApplyStockPatches(out patchDetail);
             }
             else
             {
-                RemoveCedModPatchIfPresent();
+                RemoveLookSyncPatchesIfPresent();
+                patchDetail = "look-sync patch not attempted for an unsupported CedMod state";
+            }
+
+            if (!patchApplied && HarmonyBridge.HasOwnedPatchState())
+            {
+                throw new InvalidOperationException(
+                    "Talky cannot continue while a failed look-sync patch attempt retains " +
+                    "possible Harmony ownership.");
             }
 
             CedModLookSyncPlan plan = CedModCompatibilityPolicy.Resolve(
                 selection,
+                preferHarmonyLookSync,
                 patchApplied);
             FakeLookHandler.ConfigureSyncMode(plan.Mode);
             FakeLookHandler.RegisterEvents();
+            _appliedPreferHarmonyLookSync = preferHarmonyLookSync;
+            LookSyncMode = plan.Mode;
+            LookSyncPatchDetail = patchDetail;
             _fullyEnabled = true;
 
             LogCedModCompatibility(
@@ -373,7 +432,7 @@ public class Plugin : Plugin<Config>
             }
 
             bool patchCleanupSucceeded =
-                TryCleanup("remove the CedMod sync patch", RemoveCedModPatchIfPresent);
+                TryCleanup("remove the look-sync Harmony patch", RemoveLookSyncPatchesIfPresent);
 
             if (!eventCleanupSucceeded || !patchCleanupSucceeded)
             {
@@ -388,6 +447,9 @@ public class Plugin : Plugin<Config>
             {
                 FakeLookHandler.ConfigureSyncMode(CedModLookSyncMode.CedModUnsupported);
                 FakeLookHandler.RegisterEvents();
+                _appliedPreferHarmonyLookSync = Config.PreferHarmonyLookSync;
+                LookSyncMode = CedModLookSyncMode.CedModUnsupported;
+                LookSyncPatchDetail = "post-enable recovery disabled outbound look sync";
                 _fullyEnabled = true;
                 Logger.Error(
                     "Recovered in common-events-only mode; outbound head-sync " +
@@ -409,6 +471,28 @@ public class Plugin : Plugin<Config>
         PerformanceMonitor?.Reconfigure(Config);
         Runtime?.ResetFaultDiagnostics();
         ApplyCurrentPerformancePolicy();
+        if (_fullyEnabled && Config.PreferHarmonyLookSync != _appliedPreferHarmonyLookSync)
+        {
+            Logger.Warn(
+                "prefer_harmony_look_sync changed while Talky is active; reload the plugin " +
+                "or restart the server to change look-sync hooks safely.");
+        }
+        if (_fullyEnabled)
+        {
+            CedModSelection currentSelection = CedModCompatibilityPolicy.Select(
+                CedModBridge.ProbeCandidates(
+                        PluginLoader.EnabledPlugins.Cast<object>(),
+                        "LabAPI")
+                    .State,
+                ExiledBridge.ProbeCedModExiled().State);
+            if (currentSelection.State != _appliedCedModState ||
+                currentSelection.Reason != _appliedCedModReason)
+            {
+                Logger.Warn(
+                    "CedMod look-sync state changed while Talky is active; reload the plugin " +
+                    "or restart the server before changing look-sync hooks safely.");
+            }
+        }
     }
 
     internal void ApplyCurrentPerformancePolicy()
@@ -421,18 +505,33 @@ public class Plugin : Plugin<Config>
         Runtime.ApplyPerformancePolicy(policy);
     }
 
+    /// <summary>
+    /// Records a runtime structural-access failure without tearing down Talky's
+    /// voice, face, settings, runtime, or event-subscription ownership.
+    /// </summary>
+    internal void ReportLookSyncRuntimeFailure(string detail)
+    {
+        LookSyncMode = CedModLookSyncMode.CedModUnsupported;
+        LookSyncPatchDetail = detail;
+        Logger.Error(
+            "Outbound head-sync rewriting was disabled for this Talky lifecycle; " +
+            "voice and face features remain enabled. " + detail +
+            ". Update Talky's game references or the installed game/plugin build " +
+            "before retrying.");
+    }
+
     private void ValidateConfiguration()
     {
         // Normalize an omitted translations mapping before registering settings.
         Config.Translations ??= new TranslationsConfig();
 
-        // Preserve the configured floor; speech evaluation widens an invalid ceiling at use time.
-        if (Config.LowDbThreshold >= Config.HighDbThreshold)
+        TalkyConfigValidationResult rootValidation =
+            TalkyConfigValidator.ValidateAndApply(Config);
+        if (rootValidation.WasCorrected)
         {
             Logger.Warn(
-                $"The low_db_threshold ({Config.LowDbThreshold}) is not below " +
-                $"high_db_threshold ({Config.HighDbThreshold}); the speech range will be " +
-                "widened automatically.");
+                $"Corrected {rootValidation.CorrectionCount} Talky setting(s): " +
+                rootValidation.CorrectionSummary);
         }
 
         PerformanceConfigValidationResult validation =
@@ -452,13 +551,14 @@ public class Plugin : Plugin<Config>
         string patchDetail)
     {
         string diagnostic =
-            $"CedMod sync compatibility: mode={plan.Mode}, reason={plan.Reason}; " +
+            $"Look-sync compatibility: mode={plan.Mode}, reason={plan.Reason}; " +
             $"LabAPI[{labApiProbe.Detail}]; EXILED[{exiledProbe.Detail}]; " +
             $"patch[{patchDetail}]";
         switch (plan.Mode)
         {
             case CedModLookSyncMode.CedModFakeSync:
-                Logger.Warn(diagnostic);
+            case CedModLookSyncMode.StockHarmony:
+                Logger.Info(diagnostic);
                 break;
             case CedModLookSyncMode.CedModUnsupported:
                 Logger.Error(
@@ -466,7 +566,10 @@ public class Plugin : Plugin<Config>
                     "other Talky features remain enabled.");
                 break;
             default:
-                Logger.Debug(diagnostic, Config.Debug);
+                if (plan.Reason == CedModCompatibilityReason.PatchUnavailable)
+                    Logger.Warn(diagnostic + "; using the vanilla event fallback.");
+                else
+                    Logger.Debug(diagnostic, Config.Debug);
                 break;
         }
     }

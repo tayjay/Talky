@@ -1,4 +1,3 @@
-using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -21,12 +20,8 @@ internal static class ExiledRegistration
     internal static void TryRegisterNativePlugin()
     {
         // Keep EXILED type resolution behind the assembly-presence check.
-        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-            if (asm.GetName().Name == "Exiled.API")
-            {
-                EnsureRegistered();
-                return;
-            }
+        if (ExiledBridge.ExiledPresent())
+            EnsureRegistered();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

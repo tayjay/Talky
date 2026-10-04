@@ -14,7 +14,10 @@ param(
 
     [switch] $IncompatibleHarmonyOnly,
 
-    [switch] $LabApiOnly
+    [switch] $LabApiOnly,
+
+    [ValidateSet('LoaderOnly', 'ApiOnly')]
+    [string] $ExiledPresenceOnly
 )
 
 Set-StrictMode -Version Latest
@@ -28,6 +31,28 @@ function Assert-True {
 
     if (-not $Condition) {
         throw $Message
+    }
+}
+
+function Assert-NoOptionalTypeReference {
+    param(
+        [Parameter(Mandatory = $true)][System.Type] $Type,
+        [Parameter(Mandatory = $true)][string] $Context
+    )
+
+    $assemblyName = $Type.Assembly.GetName().Name
+    if ($assemblyName -eq '0Harmony' -or
+        $assemblyName.StartsWith('Exiled.', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "LabAPI-only metadata '$Context' exposes optional type '$($Type.FullName)' from '$assemblyName'."
+    }
+
+    if ($Type.HasElementType) {
+        Assert-NoOptionalTypeReference -Type ($Type.GetElementType()) -Context $Context
+    }
+    if ($Type.IsGenericType) {
+        foreach ($argument in $Type.GetGenericArguments()) {
+            Assert-NoOptionalTypeReference -Type $argument -Context $Context
+        }
     }
 }
 
@@ -86,7 +111,8 @@ foreach ($requiredPath in @($artifactPath, $corePath, $shimPath)) {
 
 $dependencyPaths = [System.Collections.Generic.Dictionary[string, string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase)
-$dependencyRoots = if ($LabApiOnly) {
+$dependencyRoots = if ($LabApiOnly -or
+    -not [string]::IsNullOrWhiteSpace($ExiledPresenceOnly)) {
     @(
         ([System.IO.Path]::GetFullPath($ScpSlManagedDir)),
         ([System.IO.Path]::GetDirectoryName($artifactPath))
@@ -97,6 +123,7 @@ else {
         (Join-Path $repositoryRootFull 'packages\ExMod.Exiled.9.14.2\lib\net48'),
         ([System.IO.Path]::GetFullPath($ScpSlManagedDir)),
         ([System.IO.Path]::GetFullPath($ExiledDependenciesDir)),
+        (Join-Path $repositoryRootFull "Talky.PatchTests\bin\$Configuration"),
         ([System.IO.Path]::GetDirectoryName($artifactPath))
     )
 }
@@ -130,7 +157,8 @@ $resolver = [System.Func[
         -not $script:allowHarmony) {
         return $null
     }
-    if ($LabApiOnly -and $requested.Name.StartsWith(
+    if (($LabApiOnly -or -not [string]::IsNullOrWhiteSpace($ExiledPresenceOnly)) -and
+        $requested.Name.StartsWith(
             'Exiled.',
             [System.StringComparison]::OrdinalIgnoreCase)) {
         return $null
@@ -153,6 +181,15 @@ try {
             $expectedAssemblyName,
             [System.StringComparison]::Ordinal)) `
         "Artifact assembly name does not match the $Configuration lane."
+
+    $harmonyAssemblyReferences = @($artifact.GetReferencedAssemblies() | Where-Object {
+            [string]::Equals(
+                $_.Name,
+                '0Harmony',
+                [System.StringComparison]::OrdinalIgnoreCase)
+        })
+    Assert-True ($harmonyAssemblyReferences.Count -eq 0) `
+        'Production Talky.dll must discover compatible Harmony runtimes dynamically instead of carrying a version-bound 0Harmony assembly reference.'
 
     $resources = @($artifact.GetManifestResourceNames() | Sort-Object)
     Assert-True (($resources -join "`n") -eq "Talky.Core.dll`nTalky.Exiled.Shim.dll.bin") `
@@ -189,7 +226,8 @@ try {
     Assert-True ($null -ne $debugProperty -and $debugProperty.PropertyType -eq [bool]) `
         'Embedded configuration does not expose the debug metrics switch.'
 
-    if (-not $LabApiOnly) {
+    if (-not $LabApiOnly -and
+        [string]::IsNullOrWhiteSpace($ExiledPresenceOnly)) {
         # The shim is loaded from an embedded stream and therefore has no dependency-probing base
         # directory. Preload its managed framework base before resolving the derived plugin type.
         foreach ($dependencyName in @(
@@ -241,9 +279,128 @@ try {
     Assert-True (-not [bool] $hasOwnedPatchState.Invoke($null, @())) `
         'Harmony-absent cleanup retained patch ownership.'
 
+    if (-not [string]::IsNullOrWhiteSpace($ExiledPresenceOnly)) {
+        $exiledBridge = $artifact.GetType('Talky.Bridges.ExiledBridge', $true)
+        $exiledPresent = $exiledBridge.GetMethod('ExiledPresent', $staticFlags)
+        $exiledRegistration = $artifact.GetType('Talky.Bridges.ExiledRegistration', $true)
+        $tryRegister = $exiledRegistration.GetMethod('TryRegisterNativePlugin', $staticFlags)
+        Assert-True ($null -ne $exiledPresent -and $null -ne $tryRegister) `
+            'EXILED presence and registration gates are not discoverable.'
+        Assert-True (($exiledPresent.GetMethodImplementationFlags() -band
+                [System.Reflection.MethodImplAttributes]::NoInlining) -ne 0) `
+            'EXILED presence gate must remain non-inlined.'
+        Assert-True (($tryRegister.GetMethodImplementationFlags() -band
+                [System.Reflection.MethodImplAttributes]::NoInlining) -ne 0) `
+            'EXILED registration gate must remain non-inlined.'
+        Assert-True (-not [bool] $exiledPresent.Invoke($null, @())) `
+            'EXILED presence gate unexpectedly detected an optional framework identity.'
+
+        $singleIdentity = if ($ExiledPresenceOnly -eq 'LoaderOnly') {
+            'Exiled.Loader'
+        }
+        else {
+            'Exiled.API'
+        }
+        [System.Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
+            [System.Reflection.AssemblyName]::new($singleIdentity),
+            [System.Reflection.Emit.AssemblyBuilderAccess]::Run) | Out-Null
+        Assert-True (-not [bool] $exiledPresent.Invoke($null, @())) `
+            "$singleIdentity alone must not enable the EXILED bridge."
+        $tryRegister.Invoke($null, @())
+
+        $secondIdentity = if ($ExiledPresenceOnly -eq 'LoaderOnly') {
+            'Exiled.API'
+        }
+        else {
+            'Exiled.Loader'
+        }
+        [System.Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
+            [System.Reflection.AssemblyName]::new($secondIdentity),
+            [System.Reflection.Emit.AssemblyBuilderAccess]::Run) | Out-Null
+        Assert-True ([bool] $exiledPresent.Invoke($null, @())) `
+            'EXILED presence gate did not require and detect both framework identities.'
+        Write-Host "Artifact validation PASS: $singleIdentity-only is rejected; both EXILED identities are required."
+        return
+    }
+
     if ($LabApiOnly) {
-        Assert-True ($Configuration -eq 'Release') `
-            'LabAPI-only artifact probing is valid only for the Release lane.'
+        $artifactTypes = @($artifact.GetTypes())
+        Assert-True ($artifactTypes.Contains($pluginType)) `
+            'LabAPI-only type enumeration did not contain the Talky plugin type.'
+        $declaredFlags = [System.Reflection.BindingFlags]'Public,NonPublic,Instance,Static,DeclaredOnly'
+        foreach ($type in $artifactTypes) {
+            if ($null -ne $type.BaseType) {
+                Assert-NoOptionalTypeReference -Type $type.BaseType -Context "$($type.FullName) base type"
+            }
+            foreach ($interface in @($type.GetInterfaces())) {
+                Assert-NoOptionalTypeReference -Type $interface -Context "$($type.FullName) interface"
+            }
+            foreach ($field in @($type.GetFields($declaredFlags))) {
+                Assert-NoOptionalTypeReference -Type $field.FieldType -Context "$($type.FullName).$($field.Name) field"
+            }
+            foreach ($constructor in @($type.GetConstructors($declaredFlags))) {
+                foreach ($parameter in @($constructor.GetParameters())) {
+                    Assert-NoOptionalTypeReference -Type $parameter.ParameterType -Context "$($type.FullName) constructor parameter"
+                }
+            }
+            foreach ($method in @($type.GetMethods($declaredFlags))) {
+                Assert-NoOptionalTypeReference -Type $method.ReturnType -Context "$($type.FullName).$($method.Name) return"
+                foreach ($parameter in @($method.GetParameters())) {
+                    Assert-NoOptionalTypeReference -Type $parameter.ParameterType -Context "$($type.FullName).$($method.Name) parameter"
+                }
+            }
+            foreach ($property in @($type.GetProperties($declaredFlags))) {
+                Assert-NoOptionalTypeReference -Type $property.PropertyType -Context "$($type.FullName).$($property.Name) property"
+            }
+            foreach ($event in @($type.GetEvents($declaredFlags))) {
+                Assert-NoOptionalTypeReference -Type $event.EventHandlerType -Context "$($type.FullName).$($event.Name) event"
+            }
+        }
+
+        $recordingEnabled = $performanceMonitorType.GetProperty(
+            'IsDurationRecordingEnabled',
+            $instanceFlags)
+        Assert-True ($null -ne $recordingEnabled) `
+            'Performance monitor does not expose its internal duration-recording gate.'
+        $disabledConfig = [Activator]::CreateInstance($configType)
+        $performanceConfig = $configType.GetProperty('Performance').GetValue($disabledConfig)
+        $modeProperty = $performanceConfig.GetType().GetProperty('Mode')
+        $modeProperty.SetValue(
+            $performanceConfig,
+            [Enum]::Parse($modeProperty.PropertyType, 'Disabled'))
+        $disabledMonitor = [Activator]::CreateInstance(
+            $performanceMonitorType,
+            [object[]] @($disabledConfig))
+        try {
+            Assert-True (-not [bool] $recordingEnabled.GetValue($disabledMonitor)) `
+                'Disabled monitoring unexpectedly enables duration recording.'
+        }
+        finally {
+            ([IDisposable] $disabledMonitor).Dispose()
+        }
+
+        $enabledConfig = [Activator]::CreateInstance($configType)
+        $enabledMonitor = [Activator]::CreateInstance(
+            $performanceMonitorType,
+            [object[]] @($enabledConfig))
+        try {
+            Assert-True ([bool] $recordingEnabled.GetValue($enabledMonitor)) `
+                'Enabled monitoring does not permit duration recording.'
+            $freeze = $performanceMonitorType.GetMethod(
+                'Freeze',
+                [System.Reflection.BindingFlags]'Public,Instance',
+                $null,
+                [Type[]] @(),
+                $null)
+            Assert-True ($null -ne $freeze) 'Performance monitor freeze gate is missing.'
+            $freeze.Invoke($enabledMonitor, @())
+            Assert-True (-not [bool] $recordingEnabled.GetValue($enabledMonitor)) `
+                'Frozen monitoring unexpectedly enables duration recording.'
+        }
+        finally {
+            ([IDisposable] $enabledMonitor).Dispose()
+        }
+
         $plugin = [Activator]::CreateInstance($pluginType)
         Assert-True ($null -ne $plugin) 'LabAPI-only plugin construction failed.'
         $unexpectedOptional = @([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {
@@ -251,14 +408,14 @@ try {
                 $_.GetName().Name.StartsWith('Exiled.', [System.StringComparison]::OrdinalIgnoreCase)
             })
         Assert-True ($unexpectedOptional.Count -eq 0) `
-            'LabAPI-only construction unexpectedly loaded Harmony or EXILED.'
-        Write-Host 'Artifact validation PASS: fresh-process LabAPI-only construction with Harmony/EXILED absent.'
+            'LabAPI-only type enumeration or construction unexpectedly loaded Harmony or EXILED.'
+        Write-Host 'Artifact validation PASS: fresh-process LabAPI-only type/signature enumeration and construction with Harmony/EXILED absent.'
         return
     }
 
     if ($IncompatibleHarmonyOnly) {
         $fakeHarmonyName = [System.Reflection.AssemblyName]::new('0Harmony')
-        $fakeHarmonyName.Version = [Version]::new(2, 2, 2, 0)
+        $fakeHarmonyName.Version = [Version]::new(99, 0, 0, 0)
         [System.Reflection.Emit.AssemblyBuilder]::DefineDynamicAssembly(
             $fakeHarmonyName,
             [System.Reflection.Emit.AssemblyBuilderAccess]::Run) | Out-Null
@@ -285,7 +442,20 @@ try {
     }
 
     $hostExecutable = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    if ($Configuration -eq 'Release') {
+    & $hostExecutable `
+        -NoProfile `
+        -NonInteractive `
+        -ExecutionPolicy Bypass `
+        -File $PSCommandPath `
+        -Configuration $Configuration `
+        -ScpSlManagedDir $ScpSlManagedDir `
+        -ExiledDependenciesDir $ExiledDependenciesDir `
+        -RepositoryRoot $repositoryRootFull `
+        -LabApiOnly
+    Assert-True ($LASTEXITCODE -eq 0) `
+        'Fresh-process LabAPI-only construction probe failed.'
+
+    foreach ($presenceMode in @('LoaderOnly', 'ApiOnly')) {
         & $hostExecutable `
             -NoProfile `
             -NonInteractive `
@@ -295,9 +465,9 @@ try {
             -ScpSlManagedDir $ScpSlManagedDir `
             -ExiledDependenciesDir $ExiledDependenciesDir `
             -RepositoryRoot $repositoryRootFull `
-            -LabApiOnly
+            -ExiledPresenceOnly $presenceMode
         Assert-True ($LASTEXITCODE -eq 0) `
-            'Fresh-process LabAPI-only construction probe failed.'
+            "Fresh-process $presenceMode EXILED-presence probe failed."
     }
 
     & $hostExecutable `
@@ -314,24 +484,32 @@ try {
         'Fresh-process incompatible-Harmony containment probe failed.'
 
     Assert-True ($dependencyPaths.ContainsKey('0Harmony')) `
-        'Pinned Harmony dependency was not found for the presence probe.'
+        'Build-test Harmony dependency was not found for the presence probe.'
     $script:allowHarmony = $true
     $loadContext.LoadFromAssemblyPath(
         [System.IO.Path]::GetFullPath($dependencyPaths['0Harmony'])) | Out-Null
     Assert-True ([bool] $harmonyPresent.Invoke($null, @())) `
-        'Harmony-present artifact probe did not detect the pinned assembly.'
+        'Harmony-present artifact probe did not detect the build-test assembly.'
 
     # Harmony 2.2's detour engine is not compatible with the PowerShell host's newer CoreCLR,
-    # so this artifact-only probe must not initialize or patch through Harmony here. The exact
-    # known/unknown CedMod admission policy is exercised by the deterministic net48 suite; real
-    # patch lifecycle remains a same-runtime server-host acceptance gate.
+    # so this artifact-only probe must not initialize or patch through Harmony here. The x64
+    # net48 PatchTests runner exercises real apply/inspect/invoke/unpatch behavior separately;
+    # a Unity/Mono server remains the live-runtime acceptance gate.
     $harmonyRuntimeBridge = $artifact.GetType(
         'Talky.Bridges.HarmonyRuntimeBridge',
         $true)
-    Assert-True ($null -ne $harmonyRuntimeBridge.GetMethod('Prefix', $staticFlags)) `
-        'Harmony prefix callback could not be resolved from the shipped artifact.'
-    Assert-True ($null -ne $harmonyRuntimeBridge.GetMethod('Postfix', $staticFlags)) `
-        'Harmony postfix callback could not be resolved from the shipped artifact.'
+    Assert-True ($null -ne $harmonyRuntimeBridge.GetMethod(
+            'CreateHarmonyTranspiler',
+            $staticFlags)) `
+        'Runtime Harmony transpiler factory could not be resolved from the shipped artifact.'
+    Assert-True ($null -ne $harmonyRuntimeBridge.GetMethod(
+            'TransformInstructions',
+            $staticFlags)) `
+        'BCL-only Harmony instruction transformer could not be resolved from the shipped artifact.'
+    Assert-True ($null -ne $harmonyRuntimeBridge.GetMethod(
+            'SelectSerializedMouseLook',
+            $staticFlags)) `
+        'Harmony look-selector callback could not be resolved from the shipped artifact.'
 
     Write-Host "Artifact validation PASS: $artifactName; embedded core/shim; Harmony-absent lifecycle facade; Harmony-present discovery/callback metadata."
 }

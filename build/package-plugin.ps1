@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $ScpSlManagedDir,
 
+    [string] $RuntimeAssemblyCSharpPath,
+
     [Parameter(Mandatory = $true)]
     [string] $ExiledDependenciesDir,
 
@@ -54,6 +56,65 @@ function Get-PortableMvid {
     }
     finally {
         $stream.Dispose()
+    }
+}
+
+function Get-AssemblyFingerprint {
+    param([Parameter(Mandatory = $true)][string] $Path)
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+        throw "Assembly fingerprint target is missing: '$fullPath'."
+    }
+
+    # Read one coherent byte snapshot so SHA-256, size, and MVID describe the
+    # same file contents even if another process tries to replace the target.
+    $bytes = [System.IO.File]::ReadAllBytes($fullPath)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $sha256 = [Convert]::ToHexString($sha.ComputeHash($bytes))
+    }
+    finally {
+        $sha.Dispose()
+    }
+
+    $stream = [System.IO.MemoryStream]::new($bytes, $false)
+    try {
+        $peReader = [System.Reflection.PortableExecutable.PEReader]::new($stream)
+        try {
+            $metadataReader = [System.Reflection.Metadata.PEReaderExtensions]::GetMetadataReader($peReader)
+            $moduleDefinition = $metadataReader.GetModuleDefinition()
+            $mvid = $metadataReader.GetGuid($moduleDefinition.Mvid).ToString('D')
+        }
+        finally {
+            $peReader.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+
+    return [ordered]@{
+        fullPath = $fullPath
+        fileName = [System.IO.Path]::GetFileName($fullPath)
+        sha256 = $sha256
+        size = $bytes.LongLength
+        mvid = $mvid
+    }
+}
+
+function Assert-AssemblyFingerprintEqual {
+    param(
+        [Parameter(Mandatory = $true)][string] $Label,
+        [Parameter(Mandatory = $true)] $Expected,
+        [Parameter(Mandatory = $true)] $Actual
+    )
+
+    if (-not [string]::Equals([string] $Expected.fullPath, [string] $Actual.fullPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not [string]::Equals([string] $Expected.sha256, [string] $Actual.sha256, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [long] $Expected.size -ne [long] $Actual.size -or
+        -not [string]::Equals([string] $Expected.mvid, [string] $Actual.mvid, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label changed: before sha256=$($Expected.sha256), size=$($Expected.size), mvid=$($Expected.mvid); after sha256=$($Actual.sha256), size=$($Actual.size), mvid=$($Actual.mvid)."
     }
 }
 
@@ -118,6 +179,15 @@ function Get-TopLevelDirectoryIdentity {
 }
 
 $repositoryRootFull = [System.IO.Path]::GetFullPath($RepositoryRoot)
+$runtimeAssemblyCSharpFull = if ([string]::IsNullOrWhiteSpace($RuntimeAssemblyCSharpPath)) {
+    [System.IO.Path]::GetFullPath((Join-Path $ScpSlManagedDir 'Assembly-CSharp.dll'))
+}
+else {
+    [System.IO.Path]::GetFullPath($RuntimeAssemblyCSharpPath)
+}
+if (-not (Test-Path -LiteralPath $runtimeAssemblyCSharpFull -PathType Leaf)) {
+    throw "The supplied runtime Assembly-CSharp patch target is missing: '$runtimeAssemblyCSharpFull'."
+}
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repositoryRootFull 'artifacts'
 }
@@ -131,6 +201,7 @@ $cscFullPath = [System.IO.Path]::GetFullPath($CscPath)
 $manifestPath = Join-Path $repositoryRootFull 'build\reference-manifest.json'
 $verifyScript = Join-Path $repositoryRootFull 'build\verify-references.ps1'
 & $verifyScript -ManifestPath $manifestPath -RepositoryRoot $repositoryRootFull -ScpSlManagedDir $ScpSlManagedDir -ExiledDependenciesDir $ExiledDependenciesDir -MSBuildPath $msbuildFullPath -CscPath $cscFullPath -VerifyPackageSignature -VerifyPackageOrigins
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -Depth 32
 
 $trackedChanges = @(& git -C $repositoryRootFull status --porcelain --untracked-files=no)
 if ($LASTEXITCODE -ne 0) {
@@ -156,8 +227,11 @@ $commitTime = ([string] (& git -C $repositoryRootFull show -s --format=%cI $comm
 $artifactName = 'Talky.dll'
 $expectedAssemblyName = 'Talky'
 $artifactPath = Join-Path $repositoryRootFull "Talky\bin\$Configuration\$artifactName"
+$canonicalConfiguration = 'Release'
+$canonicalArtifactPath = Join-Path $repositoryRootFull "Talky\bin\$canonicalConfiguration\$artifactName"
 $pdbName = [System.IO.Path]::ChangeExtension($artifactName, '.pdb')
 $pdbPath = Join-Path ([System.IO.Path]::GetDirectoryName($artifactPath)) $pdbName
+$canonicalPdbPath = Join-Path ([System.IO.Path]::GetDirectoryName($canonicalArtifactPath)) $pdbName
 
 $solutionPath = Join-Path $repositoryRootFull 'Talky.sln'
 $cscDirectory = [System.IO.Path]::GetDirectoryName($cscFullPath)
@@ -168,6 +242,7 @@ $buildArguments = @(
     "/p:Configuration=$Configuration",
     '/p:Platform=x64',
     '/p:DeployPlugin=false',
+    '/p:TalkyVerifyToolchain=true',
     "/p:ScpSlManagedDir=$ScpSlManagedDir",
     "/p:ExiledDependenciesDir=$ExiledDependenciesDir",
     "/p:CscToolPath=$cscDirectory",
@@ -183,6 +258,25 @@ $invokePinnedRebuild = {
     }
     if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
         throw "Pinned-toolchain rebuild did not produce '$artifactPath'."
+    }
+    if (-not (Test-Path -LiteralPath $canonicalArtifactPath -PathType Leaf)) {
+        throw "Pinned-toolchain rebuild did not produce canonical artifact '$canonicalArtifactPath'."
+    }
+    $laneHash = (Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash
+    $canonicalHash = (Get-FileHash -LiteralPath $canonicalArtifactPath -Algorithm SHA256).Hash
+    if (-not [string]::Equals($canonicalHash, $laneHash, [System.StringComparison]::Ordinal)) {
+        throw "$Configuration output is not an exact copy of the canonical $canonicalConfiguration artifact: canonical '$canonicalHash', lane '$laneHash'."
+    }
+    if ($IncludePdb) {
+        if (-not (Test-Path -LiteralPath $pdbPath -PathType Leaf) -or
+            -not (Test-Path -LiteralPath $canonicalPdbPath -PathType Leaf)) {
+            throw "Pinned-toolchain rebuild did not produce both lane and canonical PDBs."
+        }
+        $lanePdbHash = (Get-FileHash -LiteralPath $pdbPath -Algorithm SHA256).Hash
+        $canonicalPdbHash = (Get-FileHash -LiteralPath $canonicalPdbPath -Algorithm SHA256).Hash
+        if (-not [string]::Equals($canonicalPdbHash, $lanePdbHash, [System.StringComparison]::Ordinal)) {
+            throw "$Configuration PDB is not an exact copy of the canonical $canonicalConfiguration PDB: canonical '$canonicalPdbHash', lane '$lanePdbHash'."
+        }
     }
 }
 
@@ -228,6 +322,64 @@ if (-not $assertionMatch.Success) {
     throw 'Lane tests exited successfully but did not emit the expected deterministic assertion summary.'
 }
 $deterministicAssertionCount = [int] $assertionMatch.Groups[1].Value
+
+$patchTestExecutable = Join-Path $repositoryRootFull "Talky.PatchTests\bin\$Configuration\Talky.PatchTests.exe"
+if (-not (Test-Path -LiteralPath $patchTestExecutable -PathType Leaf)) {
+    throw "Harmony patch test executable is missing after rebuild: '$patchTestExecutable'."
+}
+$runtimePatchFingerprintBefore = Get-AssemblyFingerprint -Path $runtimeAssemblyCSharpFull
+$patchTestOutput = @()
+$patchTestExitCode = $null
+$patchTestInvocationError = $null
+try {
+    $patchTestOutput = @(& $patchTestExecutable $repositoryRootFull $ScpSlManagedDir $ExiledDependenciesDir $runtimeAssemblyCSharpFull 2>&1)
+    $patchTestExitCode = $LASTEXITCODE
+}
+catch {
+    $patchTestInvocationError = $_
+}
+finally {
+    $runtimePatchFingerprintAfter = Get-AssemblyFingerprint -Path $runtimeAssemblyCSharpFull
+}
+Assert-AssemblyFingerprintEqual `
+    -Label 'Supplied runtime Assembly-CSharp during Harmony patch tests' `
+    -Expected $runtimePatchFingerprintBefore `
+    -Actual $runtimePatchFingerprintAfter
+$patchTestOutput | ForEach-Object { Write-Host $_ }
+if ($null -ne $patchTestInvocationError) {
+    throw $patchTestInvocationError
+}
+if ($patchTestExitCode -ne 0) {
+    throw "$Configuration Harmony patch tests failed with exit code $patchTestExitCode."
+}
+$patchTestText = $patchTestOutput -join [Environment]::NewLine
+$patchTargetMatches = [regex]::Matches(
+    $patchTestText,
+    '^Stock target:\s*(?<path>.+);\s*sha256=(?<sha256>[0-9A-Fa-f]{64});\s*size=(?<size>[0-9]+);\s*mvid=(?<mvid>[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\s*$',
+    [System.Text.RegularExpressions.RegexOptions]::Multiline)
+if ($patchTargetMatches.Count -ne 1) {
+    throw "Harmony patch tests must report exactly one bound stock target identity; found $($patchTargetMatches.Count)."
+}
+$patchTargetMatch = $patchTargetMatches[0]
+$patchTestReportedPath = [System.IO.Path]::GetFullPath($patchTargetMatch.Groups['path'].Value.Trim())
+$patchTestReportedSha256 = $patchTargetMatch.Groups['sha256'].Value.ToUpperInvariant()
+$patchTestReportedSize = [long]::Parse($patchTargetMatch.Groups['size'].Value)
+$patchTestReportedMvid = [guid]::Parse($patchTargetMatch.Groups['mvid'].Value).ToString('D')
+if (-not [string]::Equals($runtimeAssemblyCSharpFull, $patchTestReportedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Harmony patch tests reported target '$patchTestReportedPath', expected '$runtimeAssemblyCSharpFull'."
+}
+if (-not [string]::Equals([string] $runtimePatchFingerprintBefore.sha256, $patchTestReportedSha256, [System.StringComparison]::OrdinalIgnoreCase) -or
+    [long] $runtimePatchFingerprintBefore.size -ne $patchTestReportedSize -or
+    -not [string]::Equals([string] $runtimePatchFingerprintBefore.mvid, $patchTestReportedMvid, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Harmony patch tests reported different supplied target bytes: reported sha256=$patchTestReportedSha256, size=$patchTestReportedSize, mvid=$patchTestReportedMvid; expected sha256=$($runtimePatchFingerprintBefore.sha256), size=$($runtimePatchFingerprintBefore.size), mvid=$($runtimePatchFingerprintBefore.mvid)."
+}
+$patchAssertionMatch = [regex]::Match(
+    $patchTestText,
+    'PASS:\s+(\d+)\s+Harmony patch assertions\.')
+if (-not $patchAssertionMatch.Success) {
+    throw 'Harmony patch tests exited successfully but did not emit the expected assertion summary.'
+}
+$harmonyPatchAssertionCount = [int] $patchAssertionMatch.Groups[1].Value
 
 & (Join-Path $repositoryRootFull 'build\test-artifact.ps1') -Configuration $Configuration -ScpSlManagedDir $ScpSlManagedDir -ExiledDependenciesDir $ExiledDependenciesDir -RepositoryRoot $repositoryRootFull
 
@@ -304,7 +456,6 @@ if (Test-Path -LiteralPath $stageDirectory) {
     throw "Package staging directory already exists and will not be overwritten: '$stageDirectory'."
 }
 
-$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -Depth 32
 $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash
 $dotnetVersion = ([string] (& dotnet --version)).Trim()
 if ($LASTEXITCODE -ne 0) {
@@ -324,6 +475,7 @@ $provenance = [ordered]@{
     }
     build = [ordered]@{
         configuration = $Configuration
+        canonicalConfiguration = $canonicalConfiguration
         platform = 'x64'
         solution = 'Talky.sln'
         targetFramework = 'net48'
@@ -334,11 +486,13 @@ $provenance = [ordered]@{
         rebuildPerformed = $true
         testsPassed = $true
         deterministicAssertionCount = $deterministicAssertionCount
+        harmonyPatchAssertionCount = $harmonyPatchAssertionCount
         artifactValidationPassed = $true
         reproducibility = [ordered]@{
             pinnedToolchainRebuilds = 2
             artifactByteIdentical = $true
             artifactSha256 = $secondBuildArtifactHash
+            canonicalLaneCopyVerified = $true
             pdbIncluded = [bool] $IncludePdb
             pdbByteIdentical = if ($IncludePdb) { $true } else { $null }
             pdbSha256 = $secondBuildPdbHash
@@ -353,6 +507,16 @@ $provenance = [ordered]@{
     verification = [ordered]@{
         powershell = [string] $PSVersionTable.PSVersion
         dotnetSdkForNuGetSignature = $dotnetVersion
+        harmonyPatchRuntime = [ordered]@{
+            fileName = [string] $runtimePatchFingerprintAfter.fileName
+            sha256 = [string] $runtimePatchFingerprintAfter.sha256
+            size = [long] $runtimePatchFingerprintAfter.size
+            mvid = [string] $runtimePatchFingerprintAfter.mvid
+            patchTestReportedSha256 = $patchTestReportedSha256
+            patchTestReportedSize = $patchTestReportedSize
+            patchTestReportedMvid = $patchTestReportedMvid
+            unchangedDuringPatchTest = $true
+        }
         advisoryScan = [ordered]@{
             performed = $true
             clean = $true

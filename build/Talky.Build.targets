@@ -8,6 +8,10 @@
     <CscToolExe Condition=" '$(CscToolExe)' == '' ">csc.exe</CscToolExe>
     <TalkyCscExecutable Condition=" '$(CscToolPath)' != '' ">$(CscToolPath)\$(CscToolExe)</TalkyCscExecutable>
     <TalkyCscExecutable Condition=" '$(TalkyCscExecutable)' == '' ">$(MSBuildToolsPath)\Roslyn\$(CscToolExe)</TalkyCscExecutable>
+    <!-- Developer builds verify dependencies with the IDE's toolchain. Release packaging
+         verifies the exact pinned MSBuild/Roslyn binaries as well. -->
+    <TalkyVerifyToolchain Condition=" '$(TalkyVerifyToolchain)' == '' ">false</TalkyVerifyToolchain>
+    <_TalkyToolchainVerificationArgument Condition=" '$(TalkyVerifyToolchain)' != 'true' ">-SkipToolchainVerification</_TalkyToolchainVerificationArgument>
 
     <!-- The EXILED configuration deploys to EXILED's own plugin directory rather than the LabAPI
          one named by DeployDirectory. Prefer an explicit ExiledDeployDirectory, then the
@@ -15,23 +19,31 @@
          dependencies directory, which lives directly beneath it. -->
     <ExiledDeployDirectory Condition=" '$(ExiledDeployDirectory)' == '' ">$(EXILED_PLUGINS_DIR)</ExiledDeployDirectory>
     <ExiledDeployDirectory Condition=" '$(ExiledDeployDirectory)' == '' and '$(ExiledDependenciesDir)' != '' ">$([System.IO.Path]::GetFullPath('$(ExiledDependenciesDir)\..'))</ExiledDeployDirectory>
+
+    <!-- Production projects map the solution's EXILED lane to the canonical Release
+         configuration. Preserve the requested lane for deployment routing. -->
+    <TalkyRequestedDeploymentLane Condition=" '$(Configuration)' == 'EXILED' ">EXILED</TalkyRequestedDeploymentLane>
+    <TalkyRequestedDeploymentLane Condition=" '$(TalkyRequestedDeploymentLane)' == '' and
+                                               '$(BuildingSolutionFile)' == 'true' and
+                                               $([System.String]::Copy('$(CurrentSolutionConfigurationContents)').Contains('EXILED|x64')) ">EXILED</TalkyRequestedDeploymentLane>
+    <TalkyRequestedDeploymentLane Condition=" '$(TalkyRequestedDeploymentLane)' == '' ">Release</TalkyRequestedDeploymentLane>
   </PropertyGroup>
 
   <Target Name="TalkyVerifyPinnedReferences"
           BeforeTargets="ResolveAssemblyReferences"
-          Condition=" '$(TalkyVerifyReferences)' == 'true' ">
+          Condition=" '$(TalkyVerifyReferences)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(BuildingProject)' != 'false' ">
     <Error Condition=" !Exists('$(TalkyReferenceManifest)') "
            Text="Talky reference manifest is missing: $(TalkyReferenceManifest)" />
     <Error Condition=" '$(TalkyRequireGameReferences)' == 'true' and '$(ScpSlManagedDir)' == '' "
            Text="ScpSlManagedDir is required. Set /p:ScpSlManagedDir=... or SCPSL_MANAGED_DIR." />
     <Error Condition=" '$(TalkyRequireGameReferences)' == 'true' and '$(ExiledDependenciesDir)' == '' "
            Text="ExiledDependenciesDir is required. Set /p:ExiledDependenciesDir=... or EXILED_DEPENDENCIES_DIR." />
-    <Exec Command="&quot;$(TalkyPowerShellExecutable)&quot; -NoProfile -NonInteractive -File &quot;$(TalkyRepositoryRoot)\build\verify-references.ps1&quot; -ManifestPath &quot;$(TalkyReferenceManifest)&quot; -ProjectPath &quot;$(MSBuildProjectFullPath)&quot; -RepositoryRoot &quot;$(TalkyRepositoryRoot)&quot; -ScpSlManagedDir &quot;$(ScpSlManagedDir)&quot; -ExiledDependenciesDir &quot;$(ExiledDependenciesDir)&quot; -MSBuildPath &quot;$(TalkyMsBuildExecutable)&quot; -CscPath &quot;$(TalkyCscExecutable)&quot;" />
+    <Exec Command="&quot;$(TalkyPowerShellExecutable)&quot; -NoProfile -NonInteractive -File &quot;$(TalkyRepositoryRoot)\build\verify-references.ps1&quot; -ManifestPath &quot;$(TalkyReferenceManifest)&quot; -ProjectPath &quot;$(MSBuildProjectFullPath)&quot; -RepositoryRoot &quot;$(TalkyRepositoryRoot)&quot; -ScpSlManagedDir &quot;$(ScpSlManagedDir)&quot; -ExiledDependenciesDir &quot;$(ExiledDependenciesDir)&quot; -MSBuildPath &quot;$(TalkyMsBuildExecutable)&quot; -CscPath &quot;$(TalkyCscExecutable)&quot; $(_TalkyToolchainVerificationArgument)" />
   </Target>
 
   <Target Name="TalkyRejectCopyLocalReferences"
           AfterTargets="ResolveAssemblyReferences"
-          Condition=" '$(TalkyVerifyReferences)' == 'true' ">
+          Condition=" '$(TalkyVerifyReferences)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(BuildingProject)' != 'false' ">
     <Error Condition=" '@(ReferenceCopyLocalPaths)' != '' "
            Text="Framework/game references must not be copied into plugin output. Unexpected copy-local files: @(ReferenceCopyLocalPaths, ', ')." />
   </Target>
@@ -79,9 +91,9 @@
          redefinition cannot override. -->
     <PropertyGroup>
       <_TalkyDeployDestination>$(DeployDirectory)</_TalkyDeployDestination>
-      <_TalkyDeployDestination Condition=" '$(Configuration)' == 'EXILED' ">$(ExiledDeployDirectory)</_TalkyDeployDestination>
+      <_TalkyDeployDestination Condition=" '$(TalkyRequestedDeploymentLane)' == 'EXILED' ">$(ExiledDeployDirectory)</_TalkyDeployDestination>
     </PropertyGroup>
-    <Error Condition=" '$(_TalkyDeployDestination)' == '' and '$(Configuration)' == 'EXILED' "
+    <Error Condition=" '$(_TalkyDeployDestination)' == '' and '$(TalkyRequestedDeploymentLane)' == 'EXILED' "
            Text="DeployPlugin is enabled for the EXILED configuration, but neither ExiledDeployDirectory, EXILED_PLUGINS_DIR, nor ExiledDependenciesDir is set." />
     <Error Condition=" '$(_TalkyDeployDestination)' == '' "
            Text="DeployPlugin is enabled, but DeployDirectory does not name the destination plugin directory." />

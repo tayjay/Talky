@@ -18,6 +18,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $CscPath,
 
+    [switch] $SkipToolchainVerification,
+
     [switch] $VerifyPackageSignature,
 
     [switch] $VerifyPackageOrigins
@@ -359,14 +361,16 @@ if ([int] $manifest.schemaVersion -ne 1) {
 
 $msbuildFullPath = [System.IO.Path]::GetFullPath($MSBuildPath)
 $cscFullPath = [System.IO.Path]::GetFullPath($CscPath)
-Assert-ToolFile -Label 'MSBuild tool' -Path $msbuildFullPath -Expected $manifest.toolchain.msbuild
-$msbuildDirectoryIdentity = Get-TopLevelDirectoryIdentity -Path ([System.IO.Path]::GetDirectoryName($msbuildFullPath))
-Assert-Equal -Label 'MSBuild top-level file count' -Expected ([string] $manifest.toolchain.msbuildTopLevel.fileCount) -Actual ([string] $msbuildDirectoryIdentity.FileCount)
-Assert-Equal -Label 'MSBuild top-level tree SHA-256' -Expected ([string] $manifest.toolchain.msbuildTopLevel.treeSha256) -Actual ([string] $msbuildDirectoryIdentity.TreeSha256)
-Assert-ToolFile -Label 'C# compiler' -Path $cscFullPath -Expected $manifest.toolchain.csharpCompiler
-$roslynIdentity = Get-TopLevelDirectoryIdentity -Path ([System.IO.Path]::GetDirectoryName($cscFullPath))
-Assert-Equal -Label 'Roslyn top-level file count' -Expected ([string] $manifest.toolchain.roslynTopLevel.fileCount) -Actual ([string] $roslynIdentity.FileCount)
-Assert-Equal -Label 'Roslyn top-level tree SHA-256' -Expected ([string] $manifest.toolchain.roslynTopLevel.treeSha256) -Actual ([string] $roslynIdentity.TreeSha256)
+if (-not $SkipToolchainVerification) {
+    Assert-ToolFile -Label 'MSBuild tool' -Path $msbuildFullPath -Expected $manifest.toolchain.msbuild
+    $msbuildDirectoryIdentity = Get-TopLevelDirectoryIdentity -Path ([System.IO.Path]::GetDirectoryName($msbuildFullPath))
+    Assert-Equal -Label 'MSBuild top-level file count' -Expected ([string] $manifest.toolchain.msbuildTopLevel.fileCount) -Actual ([string] $msbuildDirectoryIdentity.FileCount)
+    Assert-Equal -Label 'MSBuild top-level tree SHA-256' -Expected ([string] $manifest.toolchain.msbuildTopLevel.treeSha256) -Actual ([string] $msbuildDirectoryIdentity.TreeSha256)
+    Assert-ToolFile -Label 'C# compiler' -Path $cscFullPath -Expected $manifest.toolchain.csharpCompiler
+    $roslynIdentity = Get-TopLevelDirectoryIdentity -Path ([System.IO.Path]::GetDirectoryName($cscFullPath))
+    Assert-Equal -Label 'Roslyn top-level file count' -Expected ([string] $manifest.toolchain.roslynTopLevel.fileCount) -Actual ([string] $roslynIdentity.FileCount)
+    Assert-Equal -Label 'Roslyn top-level tree SHA-256' -Expected ([string] $manifest.toolchain.roslynTopLevel.treeSha256) -Actual ([string] $roslynIdentity.TreeSha256)
+}
 
 $allReferences = @($manifest.references)
 $referencesToVerify = $allReferences
@@ -496,4 +500,5 @@ foreach ($package in $manifestPackages) {
 
 $signatureStatus = if ($VerifyPackageSignature) { ', local NuGet signatures' } else { '' }
 $originStatus = if ($VerifyPackageOrigins) { ', and official byte-identical signed NuGet origins' } else { '' }
-Write-Host "Reference verification PASS: pinned MSBuild/Roslyn toolchain, $($referencesToVerify.Count) assembly reference(s), $($manifestPackages.Count) package archive(s)$signatureStatus$originStatus."
+$toolchainStatus = if ($SkipToolchainVerification) { '' } else { 'pinned MSBuild/Roslyn toolchain, ' }
+Write-Host "Reference verification PASS: $toolchainStatus$($referencesToVerify.Count) assembly reference(s), $($manifestPackages.Count) package archive(s)$signatureStatus$originStatus."

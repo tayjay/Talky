@@ -51,7 +51,12 @@ internal static class Program
         int writeIndex = 0;
 
         Equal(capacity, rolling.Capacity, "RMS capacity");
+        Equal(0, rolling.ValidSampleCount, "RMS starts without valid samples");
+        True(!rolling.IsWindowFull, "RMS starts with an incomplete window");
+        Near(0d, rolling.MeanSquare, 0d, "Initial mean square");
         Near(0d, rolling.RootMeanSquare, 0d, "Initial RMS");
+        Near(0d, rolling.PresentationMeanSquare, 0d, "Initial presentation mean square");
+        Near(0d, rolling.PresentationRootMeanSquare, 0d, "Initial presentation RMS");
         True(double.IsNegativeInfinity(rolling.Decibels), "Silence is negative infinity dB");
 
         for (int packetIndex = 0; packetIndex < 80; packetIndex++)
@@ -73,13 +78,49 @@ internal static class Program
             double sum = 0d;
             for (int i = 0; i < reference.Length; i++)
                 sum += reference[i];
-            double expected = Math.Sqrt(sum / capacity);
-            Near(expected, rolling.RootMeanSquare, 1e-8d, "Rolling RMS equivalence");
+            AssertRollingEnergy(sum, capacity, rolling, "Random rolling equivalence");
         }
 
         rolling.Reset();
+        Near(0d, rolling.SumSquares, 0d, "Sum reset");
+        Near(0d, rolling.MeanSquare, 0d, "Mean square reset");
         Near(0d, rolling.RootMeanSquare, 0d, "RMS reset");
+        Equal(0, rolling.ValidSampleCount, "Reset clears valid sample count");
+        True(!rolling.IsWindowFull, "Reset clears full-window state");
+
+        for (int i = 0; i < packet.Length; i++)
+            packet[i] = 0.25f;
+        rolling.Write(packet, packet.Length);
+        Equal(480, rolling.ValidSampleCount, "Partial window tracks valid samples");
+        True(!rolling.IsWindowFull, "One packet does not fill the presentation window");
+        Near(0.00625d, rolling.MeanSquare, 1e-10d, "Calibration mean square retains zero-filled divisor");
+        Near(0.0625d, rolling.PresentationMeanSquare, 1e-10d, "Presentation mean square uses valid samples");
+        Near(0.25d, rolling.PresentationRootMeanSquare, 1e-10d, "Presentation RMS has no gap ramp");
+        for (int packetIndex = 1; packetIndex < 10; packetIndex++)
+            rolling.Write(packet, packet.Length);
+        Equal(capacity, rolling.ValidSampleCount, "Ten packets fill the rolling window");
+        True(rolling.IsWindowFull, "Full-window state is exposed");
+        Near(rolling.MeanSquare, rolling.PresentationMeanSquare, 0d, "Full presentation and calibration means converge");
+        rolling.Reset();
+
+        Throws<ArgumentNullException>(() => rolling.Write(null, 0), "RMS rejects null samples");
         Throws<ArgumentOutOfRangeException>(() => rolling.Write(packet, -1), "RMS rejects negative count");
+        Throws<ArgumentOutOfRangeException>(
+            () => rolling.Write(packet, -1, 1),
+            "RMS rejects negative offset");
+        Throws<ArgumentOutOfRangeException>(
+            () => rolling.Write(packet, 1, packet.Length),
+            "RMS rejects offset/count overflow");
+        rolling.Write(packet, packet.Length, 0);
+
+        VerifyRollingEnergyMixedWrites(1);
+        VerifyRollingEnergyMixedWrites(479);
+        VerifyRollingEnergyMixedWrites(480);
+        VerifyRollingEnergyMixedWrites(481);
+        VerifyRollingEnergyMixedWrites(960);
+        VerifyRollingEnergyMixedWrites(4800);
+        VerifyRollingEnergyResetIsolation();
+        VerifyRollingEnergyGenerationWrap();
 
         rolling.Write(packet, packet.Length);
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
@@ -92,11 +133,143 @@ internal static class Program
         Equal(0L, allocated, "Rolling RMS steady-state allocation");
     }
 
+    private static void VerifyRollingEnergyMixedWrites(int capacity)
+    {
+        int[] counts =
+        {
+            0, 1, Math.Min(479, capacity + 7), 480, 120, 360,
+            2, Math.Max(1, capacity * 2 + 17), 479, 1, 480,
+        };
+        int largestCount = 0;
+        for (int i = 0; i < counts.Length; i++)
+            largestCount = Math.Max(largestCount, counts[i]);
+
+        const int offset = 3;
+        float[] input = new float[largestCount + offset];
+        float[] reference = new float[capacity];
+        RollingVoiceEnergy rolling = new RollingVoiceEnergy(capacity);
+        Random random = new Random(9000 + capacity);
+        int writeIndex = 0;
+        for (int operation = 0; operation < counts.Length; operation++)
+        {
+            int count = counts[operation];
+            for (int i = 0; i < count; i++)
+            {
+                double value = random.NextDouble() * 2d - 1d;
+                input[offset + i] = (float)value;
+            }
+
+            rolling.Write(input, offset, count);
+            for (int i = 0; i < count; i++)
+            {
+                float sample = input[offset + i];
+                reference[writeIndex] = sample * sample;
+                writeIndex++;
+                if (writeIndex == capacity)
+                    writeIndex = 0;
+            }
+
+            double expectedSum = 0d;
+            for (int i = 0; i < reference.Length; i++)
+                expectedSum += reference[i];
+            AssertRollingEnergy(
+                expectedSum,
+                capacity,
+                rolling,
+                "Mixed rolling equivalence capacity=" + capacity + " operation=" + operation);
+        }
+    }
+
+    private static void VerifyRollingEnergyResetIsolation()
+    {
+        const int capacity = 4800;
+        RollingVoiceEnergy rolling = new RollingVoiceEnergy(capacity);
+        float[] high = new float[480];
+        for (int i = 0; i < high.Length; i++)
+            high[i] = 1f;
+        for (int i = 0; i < capacity / high.Length + 3; i++)
+            rolling.Write(high, high.Length);
+
+        for (int reset = 0; reset < 8; reset++)
+        {
+            rolling.Reset();
+            Near(0d, rolling.SumSquares, 0d, "O(1) reset hides stale sum");
+            float[] quiet = new float[480];
+            int count = reset % 3 == 0 ? 1 : reset % 3 == 1 ? 479 : 480;
+            for (int i = 0; i < count; i++)
+                quiet[i] = 0.01f * (i % 2 == 0 ? 1f : -1f);
+            rolling.Write(quiet, 0, count);
+
+            double expectedSum = 0d;
+            for (int i = 0; i < count; i++)
+                expectedSum += quiet[i] * quiet[i];
+            AssertRollingEnergy(
+                expectedSum,
+                capacity,
+                rolling,
+                "O(1) reset ignores stale samples cycle=" + reset);
+        }
+
+        float[] steadyPacket = new float[480];
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10000; i++)
+        {
+            rolling.Reset();
+            rolling.Write(steadyPacket, steadyPacket.Length);
+            _measurementSink += rolling.MeanSquare;
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Equal(0L, allocated, "Rolling RMS reset path allocation");
+    }
+
+    private static void VerifyRollingEnergyGenerationWrap()
+    {
+        RollingVoiceEnergy rolling = new RollingVoiceEnergy(480);
+        System.Reflection.FieldInfo generation = typeof(RollingVoiceEnergy).GetField(
+            "_generation",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic);
+        True(generation != null, "Rolling RMS generation field is discoverable for wrap test");
+        generation.SetValue(rolling, int.MaxValue);
+        rolling.Reset();
+
+        float[] packet = new float[480];
+        for (int i = 0; i < packet.Length; i++)
+            packet[i] = 0.25f;
+        rolling.Write(packet, packet.Length);
+        AssertRollingEnergy(30d, 480, rolling, "Generation wrap resets block metadata");
+    }
+
+    private static void AssertRollingEnergy(
+        double expectedSum,
+        int capacity,
+        RollingVoiceEnergy rolling,
+        string name)
+    {
+        double sumTolerance = Math.Max(1e-10d, Math.Abs(expectedSum) * 1e-8d);
+        Near(expectedSum, rolling.SumSquares, sumTolerance, name + " sum");
+        double expectedMeanSquare = expectedSum / capacity;
+        double meanTolerance = Math.Max(
+            1e-12d,
+            Math.Abs(expectedMeanSquare) * 1e-8d);
+        Near(expectedMeanSquare, rolling.MeanSquare, meanTolerance, name + " mean square");
+        double expectedRms = Math.Sqrt(expectedMeanSquare);
+        Near(expectedRms, rolling.RootMeanSquare, 1e-8d, name + " RMS");
+        double expectedDecibels = expectedRms > 0d
+            ? 20d * Math.Log10(expectedRms)
+            : double.NegativeInfinity;
+        if (double.IsNegativeInfinity(expectedDecibels))
+            True(double.IsNegativeInfinity(rolling.Decibels), name + " dB silence");
+        else
+            Near(expectedDecibels, rolling.Decibels, 1e-7d, name + " dB");
+    }
+
     private static void TestVoicePresentationState()
     {
         VoicePresentationState presentation = new VoicePresentationState();
 
         Near(0d, presentation.RootMeanSquare, 0d, "Voice presentation starts silent");
+        Near(0d, presentation.MeanSquare, 0d, "Voice presentation starts with zero mean square");
         Near(-1d, presentation.LastActivitySeconds, 0d, "Voice presentation starts inactive");
         True(!presentation.WasRecentlyActive(0d, 500d), "Empty voice presentation is inactive");
 
@@ -106,6 +279,7 @@ internal static class Program
 
         True(presentation.TryPresent(480, 0.125d, 10d), "Decoded packet presents voice");
         Near(0.125d, presentation.RootMeanSquare, 0d, "Presentation copies decoded RMS");
+        Near(0.015625d, presentation.MeanSquare, 0d, "Legacy presentation derives mean square");
         Near(10d, presentation.LastActivitySeconds, 0d, "Presentation copies packet time");
         True(presentation.WasRecentlyActive(10.499d, 500d), "Voice presentation active inside expiry");
         True(!presentation.WasRecentlyActive(10.501d, 500d), "Voice presentation expires outside duration");
@@ -122,6 +296,19 @@ internal static class Program
         Near(0.5d, newProxy.RootMeanSquare, 0d, "New proxy receives the next snapshot");
         True(!oldProxy.WasRecentlyActive(20.501d, 500d), "Old proxy naturally expires");
 
+        True(
+            presentation.TryPresentMeanSquare(480, 0.0625d, 21d),
+            "Mean-square presentation accepts decoded voice");
+        Near(0.0625d, presentation.MeanSquare, 0d, "Presentation copies mean square");
+        Near(0.25d, presentation.RootMeanSquare, 0d, "Presentation lazily derives public RMS");
+        True(
+            !presentation.TryPresentMeanSquare(480, double.NaN, 22d),
+            "Mean-square presentation rejects non-finite energy");
+        True(
+            !presentation.TryPresentMeanSquare(480, -0.1d, 22d),
+            "Mean-square presentation rejects negative energy");
+        Near(0.0625d, presentation.MeanSquare, 0d, "Rejected mean square keeps prior snapshot");
+
         presentation.TryPresent(480, 0.1d, 30d);
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 10000; i++)
@@ -134,7 +321,22 @@ internal static class Program
         long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
         Equal(0L, allocated, "Voice presentation steady-state allocation");
 
+        allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10000; i++)
+        {
+            presentation.TryPresentMeanSquare(
+                480,
+                (i & 1) == 0 ? 0.01d : 0.81d,
+                i);
+            _measurementSink += presentation.MeanSquare;
+            if ((i & 3) == 0)
+                _measurementSink += presentation.RootMeanSquare;
+        }
+        allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Equal(0L, allocated, "Mean-square presentation steady-state allocation");
+
         presentation.Reset();
+        Near(0d, presentation.MeanSquare, 0d, "Voice presentation reset clears mean square");
         Near(0d, presentation.RootMeanSquare, 0d, "Voice presentation reset clears RMS");
         Near(-1d, presentation.LastActivitySeconds, 0d, "Voice presentation reset clears activity");
     }
@@ -203,6 +405,40 @@ internal static class Program
             "Recovery probe stays within retained impact history");
 
         Config root = new Config();
+        True(!TalkyConfigValidator.ValidateAndApply(root).WasCorrected, "Default root config requires no corrections");
+        True(root.PreferHarmonyLookSync, "Harmony look sync is preferred by default");
+
+        Config invalidRoot = new Config
+        {
+            LowDbThreshold = double.NaN,
+            HighDbThreshold = double.NegativeInfinity,
+            EmotionResetTime = -1,
+            SpeechUpdateInterval = float.NaN,
+            MiniumDamageForReaction = -5,
+            HeadBobAmount = -10f,
+            GlaceRange = -7f,
+            GlaceFov = 500f,
+            GlaceGain = float.PositiveInfinity,
+            GlanceMaxYaw = -40f,
+            GlanceMaxPitch = 120f,
+            GlanceMaxDuration = -1,
+        };
+        TalkyConfigValidationResult rootValidation =
+            TalkyConfigValidator.ValidateAndApply(invalidRoot);
+        True(rootValidation.WasCorrected, "Invalid root config reports corrections");
+        True(rootValidation.CorrectionSummary.Contains(nameof(invalidRoot.GlanceMaxYaw)), "Root correction names yaw");
+        Near(-80d, invalidRoot.LowDbThreshold, 0d, "Invalid low dB uses default");
+        Near(-30d, invalidRoot.HighDbThreshold, 0d, "Invalid high dB uses default");
+        Equal(0, invalidRoot.EmotionResetTime, "Negative emotion reset clamps to zero");
+        Near(0.033d, invalidRoot.SpeechUpdateInterval, 1e-7d, "Invalid speech interval uses default");
+        Equal(0, invalidRoot.MiniumDamageForReaction, "Negative damage threshold clamps to zero");
+        Near(0d, invalidRoot.HeadBobAmount, 0d, "Negative head bob clamps to zero");
+        Near(0d, invalidRoot.GlaceRange, 0d, "Negative glance range clamps to zero");
+        Near(360d, invalidRoot.GlaceFov, 0d, "Glance FOV respects angular domain");
+        Near(1.5d, invalidRoot.GlaceGain, 0d, "Invalid glance gain uses default");
+        Near(0d, invalidRoot.GlanceMaxYaw, 0d, "Negative glance yaw clamps to zero");
+        Near(90d, invalidRoot.GlanceMaxPitch, 0d, "Glance pitch respects angular domain");
+        Equal(0L, invalidRoot.GlanceMaxDuration, "Negative glance duration clamps to zero");
         EffectivePerformancePolicy full = EffectivePerformancePolicy.Create(root, PerformanceTier.Full);
         True(full.FaceAnimationEnabled && full.DecodeVoiceEnabled, "Full face and decode");
         True(full.HeadBobbingEnabled && full.GlancingEnabled, "Full configured head features");
@@ -683,6 +919,23 @@ internal static class Program
         True(decision.Changed, "Ten-second recovery gate opens on fifth window");
 
         config = FastGovernorConfig();
+        config.RecoveryHealthySeconds = 5;
+        governor = new AdaptivePerformanceGovernor(config, 0d);
+        governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
+        GovernorSample shortHealthyWindow =
+            new GovernorSample(0.25d, 16d, true, true, 1.25d);
+        governor.Evaluate(shortHealthyWindow, 1.25d);
+        governor.Evaluate(shortHealthyWindow, 2.5d);
+        governor.Evaluate(shortHealthyWindow, 3.75d);
+        True(
+            !governor.IsRecoveryProbeActive,
+            "Recovery uses measured window duration instead of configured window count");
+        decision = governor.Evaluate(shortHealthyWindow, 5d);
+        True(
+            decision.Changed && governor.IsRecoveryProbeActive,
+            "Recovery opens when measured healthy duration reaches the configured threshold");
+
+        config = FastGovernorConfig();
         config.RecoveryHealthySeconds = 2;
         governor = new AdaptivePerformanceGovernor(config, 0d);
         governor.Evaluate(new GovernorSample(3.1d, 16d, true), 0d);
@@ -918,6 +1171,17 @@ internal static class Program
 
     private static void TestMetricCatalogAndSummary()
     {
+        Equal(23, (int)PerformanceCounter.GlanceSelections, "Existing performance counter value");
+        Equal(24, (int)PerformanceCounter.LookSelectorCalls, "Selector calls counter value");
+        Equal(25, (int)PerformanceCounter.LookSelectorPassThroughs, "Selector pass-through counter value");
+        Equal(26, (int)PerformanceCounter.LookSelectorRewrites, "Selector rewrite counter value");
+        Equal(27, (int)PerformanceCounter.LookSelectorScratchAllocations, "Selector allocation counter value");
+        Equal(28, (int)PerformanceCounter.LookSelectorFailures, "Selector failure counter value");
+        Equal(29, (int)PerformanceCounter.ManualLookDetections, "Manual look detections counter value");
+        Equal(30, (int)PerformanceCounter.ManualLookSuppressedTicks, "Manual look suppression counter value");
+        Equal(31, (int)PerformanceCounter.ZeroCorrectionRewrites, "Zero correction rewrites counter value");
+        Equal(32, (int)PerformanceCounter.Count, "Performance counter sentinel value");
+
         bool[] budgeted =
         {
             true, false, false, true, true, false,
@@ -1038,6 +1302,15 @@ internal static class Program
             !message.Contains("profiler="),
             "Summary does not imply the frame monitor is total profiler overhead");
         True(message.Contains("sync_entries=7"), "Summary message counter values");
+        True(message.Contains("look_selector_calls=25"), "Summary selector call diagnostics");
+        True(
+            message.Contains("look_selector_pass_throughs=26"),
+            "Summary selector pass-through diagnostics");
+        True(message.Contains("look_selector_rewrites=27"), "Summary selector rewrite diagnostics");
+        True(
+            message.Contains("look_selector_scratch_allocations=28"),
+            "Summary selector allocation diagnostics");
+        True(message.Contains("look_selector_failures=29"), "Summary selector failure diagnostics");
         string probeMessage = summary.CreateLogMessage(
             PerformanceMode.Automatic,
             PerformanceTier.Full,

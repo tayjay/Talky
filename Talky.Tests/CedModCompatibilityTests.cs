@@ -12,7 +12,10 @@ internal static class CedModCompatibilityTests
         _assertions = 0;
         TestConfigurationInspection();
         TestLoaderSelection();
+        TestEnumValueStability();
         TestModeResolution();
+        TestHarmonyModeResolution();
+        TestLookSyncSelectionPolicy();
         TestPerInvocationRewriteState();
         TestRewriteCommitCoherence();
         return _assertions;
@@ -155,6 +158,247 @@ internal static class CedModCompatibilityTests
             CedModCompatibilityReason.ConfigurationUnreadable,
             plan.Reason,
             "Incoherent selection reports unreadable compatibility state");
+    }
+
+    private static void TestEnumValueStability()
+    {
+        Equal(0, (int)CedModLookSyncMode.StockSync, "Stock sync enum value");
+        Equal(1, (int)CedModLookSyncMode.CedModFakeSync, "CedMod fake sync enum value");
+        Equal(2, (int)CedModLookSyncMode.CedModUnsupported, "Unsupported enum value");
+        Equal(3, (int)CedModLookSyncMode.StockHarmony, "Stock Harmony enum value");
+
+        Equal(5, (int)CedModCompatibilityReason.PatchUnavailable, "Patch unavailable reason value");
+        Equal(
+            6,
+            (int)CedModCompatibilityReason.HarmonyPreferenceDisabled,
+            "Harmony preference reason value");
+    }
+
+    private static void TestHarmonyModeResolution()
+    {
+        CedModSelection absent = new CedModSelection(
+            CedModPluginState.NotPresent,
+            CedModCompatibilityReason.NotPresent);
+        CedModLookSyncPlan plan = CedModCompatibilityPolicy.Resolve(absent, true, true);
+        Equal(CedModLookSyncMode.StockHarmony, plan.Mode, "Stock Harmony patch success mode");
+        Equal(CedModCompatibilityReason.NotPresent, plan.Reason, "Stock Harmony success reason");
+        True(!plan.UseStockEvents, "Stock Harmony success skips stock events");
+        True(plan.UseStockPatch, "Stock Harmony success reports stock patch use");
+        True(!plan.UseCedModPatch, "Stock Harmony success does not claim CedMod patch use");
+
+        plan = CedModCompatibilityPolicy.Resolve(absent, true, false);
+        Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode, "Stock Harmony failure fails closed");
+        Equal(CedModCompatibilityReason.PatchUnavailable, plan.Reason, "Stock patch failure reason");
+        True(!plan.UseStockEvents, "Stock Harmony failure leaves the legacy event path untouched");
+        True(!plan.UseStockPatch, "Stock Harmony failure does not claim patch use");
+
+        CedModSelection stockCedMod = new CedModSelection(
+            CedModPluginState.StockSync,
+            CedModCompatibilityReason.FakeSyncDisabled);
+        plan = CedModCompatibilityPolicy.Resolve(stockCedMod, true, true);
+        Equal(
+            CedModLookSyncMode.StockHarmony,
+            plan.Mode,
+            "CedMod with fake syncing disabled uses the verified stock Harmony patch");
+        Equal(
+            CedModCompatibilityReason.FakeSyncDisabled,
+            plan.Reason,
+            "CedMod stock Harmony mode preserves the compatibility reason");
+        True(plan.UseStockPatch, "CedMod stock Harmony mode reports stock patch use");
+
+        plan = CedModCompatibilityPolicy.Resolve(stockCedMod, true, false);
+        Equal(
+            CedModLookSyncMode.CedModUnsupported,
+            plan.Mode,
+            "CedMod with fake syncing disabled fails closed when the structural stock patch is unavailable");
+        Equal(
+            CedModCompatibilityReason.PatchUnavailable,
+            plan.Reason,
+            "CedMod stock fallback reports the unavailable patch");
+        True(!plan.UseStockEvents, "CedMod stock patch rejection leaves vanilla events untouched");
+
+        plan = CedModCompatibilityPolicy.Resolve(stockCedMod, false, true);
+        Equal(CedModLookSyncMode.StockSync, plan.Mode, "Preference-off stock mode");
+        Equal(
+            CedModCompatibilityReason.FakeSyncDisabled,
+            plan.Reason,
+            "Preference-off stock preserves selection reason");
+        True(plan.UseStockEvents, "Preference-off stock uses events");
+        True(!plan.UseStockPatch, "Preference-off stock ignores a patch outcome");
+
+        CedModSelection fakeCedMod = new CedModSelection(
+            CedModPluginState.FakeSync,
+            CedModCompatibilityReason.FakeSyncEnabled);
+        plan = CedModCompatibilityPolicy.Resolve(fakeCedMod, true, true);
+        Equal(CedModLookSyncMode.CedModFakeSync, plan.Mode, "CedMod Harmony patch success mode");
+        True(!plan.UseStockEvents, "CedMod Harmony success skips stock events");
+        True(!plan.UseStockPatch, "CedMod Harmony success does not claim stock patch use");
+        True(plan.UseCedModPatch, "CedMod Harmony success reports CedMod patch use");
+
+        plan = CedModCompatibilityPolicy.Resolve(fakeCedMod, true, false);
+        Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode, "CedMod Harmony failure fails closed");
+        Equal(CedModCompatibilityReason.PatchUnavailable, plan.Reason, "CedMod Harmony failure reason");
+
+        plan = CedModCompatibilityPolicy.Resolve(fakeCedMod, false, true);
+        Equal(
+            CedModLookSyncMode.CedModUnsupported,
+            plan.Mode,
+            "Preference-off CedMod fake sync is unsupported");
+        Equal(
+            CedModCompatibilityReason.HarmonyPreferenceDisabled,
+            plan.Reason,
+            "Preference-off CedMod fake sync reason");
+        True(!plan.UseStockEvents, "Preference-off CedMod never falls back to stock events");
+        True(!plan.UseStockPatch, "Preference-off CedMod does not claim stock patch use");
+        True(!plan.UseCedModPatch, "Preference-off CedMod does not claim CedMod patch use");
+    }
+
+    private static void TestLookSyncSelectionPolicy()
+    {
+        True(
+            LookSyncSelectionPolicy.IsHarmonyModeActive(
+                true,
+                CedModLookSyncMode.StockHarmony),
+            "Stock Harmony mode activates selector policy");
+        True(
+            LookSyncSelectionPolicy.IsHarmonyModeActive(
+                true,
+                CedModLookSyncMode.CedModFakeSync),
+            "CedMod Harmony mode activates selector policy");
+        True(
+            !LookSyncSelectionPolicy.IsHarmonyModeActive(
+                true,
+                CedModLookSyncMode.StockSync),
+            "Vanilla mode keeps stale selector callbacks inert");
+        True(
+            !LookSyncSelectionPolicy.IsHarmonyModeActive(
+                false,
+                CedModLookSyncMode.StockHarmony),
+            "Unregistered handler keeps selector inert");
+
+        True(
+            LookSyncSelectionPolicy.IsImmediatePairEligible(
+                false, false, true, true, true, false, false),
+            "Ordinary visible remote pair is immediately eligible");
+        True(
+            !LookSyncSelectionPolicy.IsImmediatePairEligible(
+                true, false, true, true, true, false, false),
+            "Invisible pair passes through");
+        True(
+            !LookSyncSelectionPolicy.IsImmediatePairEligible(
+                false, true, true, true, true, false, false),
+            "CedMod near-positioned pair passes through");
+        True(
+            !LookSyncSelectionPolicy.IsImmediatePairEligible(
+                false, false, true, true, true, true, false),
+            "Self pair passes through");
+        True(
+            !LookSyncSelectionPolicy.IsImmediatePairEligible(
+                false, false, true, true, true, false, true),
+            "Local target passes through");
+        True(
+            !LookSyncSelectionPolicy.IsImmediatePairEligible(
+                false, false, false, true, true, false, false),
+            "Missing receiver passes through");
+        True(
+            !LookSyncSelectionPolicy.IsImmediatePairEligible(
+                false, false, true, false, true, false, false),
+            "Missing target passes through");
+        True(
+            !LookSyncSelectionPolicy.IsImmediatePairEligible(
+                false, false, true, true, false, false, false),
+            "Missing movement module passes through");
+
+        True(
+            LookSyncSelectionPolicy.ShouldInstrumentSelector(
+                true,
+                CedModLookSyncMode.StockHarmony,
+                false, false, true, true, true, false, false,
+                true, true),
+            "Active visible Harmony pair enters measured selector path");
+        True(
+            !LookSyncSelectionPolicy.ShouldInstrumentSelector(
+                true,
+                CedModLookSyncMode.StockSync,
+                false, false, true, true, true, false, false,
+                true, true),
+            "Vanilla fallback is excluded from selector instrumentation");
+        True(
+            !LookSyncSelectionPolicy.ShouldInstrumentSelector(
+                true,
+                CedModLookSyncMode.StockHarmony,
+                true, false, true, true, true, false, false,
+                true, true),
+            "Immediately ineligible pair is excluded from selector instrumentation");
+        True(
+            !LookSyncSelectionPolicy.ShouldInstrumentSelector(
+                true,
+                CedModLookSyncMode.StockHarmony,
+                false, false, true, true, true, false, false,
+                false, true),
+            "Disabled runtime is excluded from selector instrumentation");
+        True(
+            !LookSyncSelectionPolicy.ShouldInstrumentSelector(
+                true,
+                CedModLookSyncMode.StockHarmony,
+                false, false, true, true, true, false, false,
+                true, false),
+            "Runtime without active look targets is excluded from selector instrumentation");
+
+        True(
+            LookSyncSelectionPolicy.IsRuntimeTargetActive(true, true, true),
+            "Enabled active runtime target is eligible");
+        True(
+            !LookSyncSelectionPolicy.IsRuntimeTargetActive(false, true, true),
+            "Inactive runtime passes through");
+        True(
+            !LookSyncSelectionPolicy.IsRuntimeTargetActive(true, false, true),
+            "Runtime without active targets passes through");
+        True(
+            !LookSyncSelectionPolicy.IsRuntimeTargetActive(true, true, false),
+            "Stale inactive target passes through");
+
+        True(
+            LookSyncSelectionPolicy.IsViewerAllowed(false, false),
+            "Ordinary receiver does not require spectator permission");
+        True(
+            !LookSyncSelectionPolicy.IsViewerAllowed(true, false),
+            "Disallowed spectator passes through");
+        True(
+            LookSyncSelectionPolicy.IsViewerAllowed(true, true),
+            "Allowed spectator receives presentation look");
+
+        True(
+            LookSyncSelectionPolicy.IsTargetStateCurrent(true, true, true, true),
+            "Current tracker and FPC module are eligible");
+        True(
+            !LookSyncSelectionPolicy.IsTargetStateCurrent(false, true, true, true),
+            "Missing or disposed tracker passes through");
+        True(
+            !LookSyncSelectionPolicy.IsTargetStateCurrent(true, false, true, true),
+            "Non-FPC role passes through");
+        True(
+            !LookSyncSelectionPolicy.IsTargetStateCurrent(true, true, false, true),
+            "Role movement-module change passes through");
+        True(
+            !LookSyncSelectionPolicy.IsTargetStateCurrent(true, true, true, false),
+            "Stale live-look instance passes through");
+
+        True(
+            !LookSyncSelectionPolicy.HasPresentationOffset(0f, 0f, 0f, 0f),
+            "Both-zero offset state passes through");
+        True(
+            LookSyncSelectionPolicy.HasPresentationOffset(2f, -1f, 2f, -1f),
+            "Unchanged nonzero effective offset still uses presentation look");
+        True(
+            LookSyncSelectionPolicy.HasPresentationOffset(0f, 0f, 2f, -1f),
+            "Return-to-zero state uses presentation look");
+        True(
+            !LookSyncSelectionPolicy.HasPresentationOffset(float.NaN, 0f, 1f, 0f),
+            "Non-finite next offset passes through");
+        True(
+            !LookSyncSelectionPolicy.HasPresentationOffset(1f, 0f, float.PositiveInfinity, 0f),
+            "Non-finite last offset passes through");
     }
 
     private static void TestPerInvocationRewriteState()

@@ -1,4 +1,6 @@
+using System;
 using System.ComponentModel;
+using System.Text;
 using Talky.Performance;
 
 namespace Talky.Settings;
@@ -58,6 +60,9 @@ public class Config
     [Description("Should Spectators see client-side head movements? Default is false.")]
     public bool EnabledSpectatorHeadMovements { get; set; } = false;
 
+    [Description("Prefer structurally validated Harmony look-sync patches. When enabled, an incompatible method shape fails closed instead of entering the legacy return-valued RoleSyncEvent path. Set false only to opt into that interoperability-limited fallback. Default is true.")]
+    public bool PreferHarmonyLookSync { get; set; } = true;
+
     [Description("Performance profiling and automatic quality controls.")]
     public PerformanceConfig Performance { get; set; } = new PerformanceConfig();
 
@@ -67,4 +72,228 @@ public class Config
     [Description("Enable or disable debug logs. Default is false.")]
     public virtual bool Debug { get; set; } = false;
 
+}
+
+public sealed class TalkyConfigValidationResult
+{
+    internal TalkyConfigValidationResult(int correctionCount, string correctionSummary)
+    {
+        CorrectionCount = correctionCount;
+        CorrectionSummary = correctionSummary ?? string.Empty;
+    }
+
+    public int CorrectionCount { get; }
+    public bool WasCorrected => CorrectionCount != 0;
+    public string CorrectionSummary { get; }
+}
+
+/// <summary>
+/// Applies bounded startup semantics to settings consumed by animation and hot paths.
+/// </summary>
+public static class TalkyConfigValidator
+{
+    public static TalkyConfigValidationResult ValidateAndApply(Config config)
+    {
+        if (config == null)
+            throw new ArgumentNullException(nameof(config));
+
+        int corrections = 0;
+        StringBuilder summary = null;
+
+        config.LowDbThreshold = ClampFinite(
+            config.LowDbThreshold,
+            -160d,
+            -1d,
+            -80d,
+            nameof(config.LowDbThreshold),
+            ref summary,
+            ref corrections);
+        config.HighDbThreshold = ClampFinite(
+            config.HighDbThreshold,
+            -159d,
+            20d,
+            -30d,
+            nameof(config.HighDbThreshold),
+            ref summary,
+            ref corrections);
+        if (config.HighDbThreshold <= config.LowDbThreshold)
+        {
+            config.HighDbThreshold = Math.Min(20d, config.LowDbThreshold + 1d);
+            AddCorrection(ref summary, ref corrections, nameof(config.HighDbThreshold));
+        }
+
+        config.EmotionResetTime = Clamp(
+            config.EmotionResetTime,
+            0,
+            60000,
+            nameof(config.EmotionResetTime),
+            ref summary,
+            ref corrections);
+        config.SpeechUpdateInterval = ClampFinite(
+            config.SpeechUpdateInterval,
+            1f / 240f,
+            1f,
+            0.033f,
+            nameof(config.SpeechUpdateInterval),
+            ref summary,
+            ref corrections);
+        config.MiniumDamageForReaction = Clamp(
+            config.MiniumDamageForReaction,
+            0,
+            1000,
+            nameof(config.MiniumDamageForReaction),
+            ref summary,
+            ref corrections);
+        config.HeadBobAmount = ClampFinite(
+            config.HeadBobAmount,
+            0f,
+            90f,
+            10f,
+            nameof(config.HeadBobAmount),
+            ref summary,
+            ref corrections);
+        config.GlaceRange = ClampFinite(
+            config.GlaceRange,
+            0f,
+            100f,
+            7f,
+            nameof(config.GlaceRange),
+            ref summary,
+            ref corrections);
+        config.GlaceFov = ClampFinite(
+            config.GlaceFov,
+            0f,
+            360f,
+            140f,
+            nameof(config.GlaceFov),
+            ref summary,
+            ref corrections);
+        config.GlaceGain = ClampFinite(
+            config.GlaceGain,
+            0f,
+            20f,
+            1.5f,
+            nameof(config.GlaceGain),
+            ref summary,
+            ref corrections);
+        config.GlanceMaxYaw = ClampFinite(
+            config.GlanceMaxYaw,
+            0f,
+            180f,
+            40f,
+            nameof(config.GlanceMaxYaw),
+            ref summary,
+            ref corrections);
+        config.GlanceMaxPitch = ClampFinite(
+            config.GlanceMaxPitch,
+            0f,
+            90f,
+            35f,
+            nameof(config.GlanceMaxPitch),
+            ref summary,
+            ref corrections);
+        config.GlanceMaxDuration = Clamp(
+            config.GlanceMaxDuration,
+            0L,
+            60000L,
+            nameof(config.GlanceMaxDuration),
+            ref summary,
+            ref corrections);
+
+        return new TalkyConfigValidationResult(
+            corrections,
+            summary == null ? string.Empty : summary.ToString());
+    }
+
+    private static double ClampFinite(
+        double value,
+        double minimum,
+        double maximum,
+        double fallback,
+        string name,
+        ref StringBuilder summary,
+        ref int corrections)
+    {
+        double corrected = value;
+        if (double.IsNaN(corrected) || double.IsInfinity(corrected))
+            corrected = fallback;
+        if (corrected < minimum)
+            corrected = minimum;
+        if (corrected > maximum)
+            corrected = maximum;
+        if (corrected.Equals(value))
+            return corrected;
+
+        AddCorrection(ref summary, ref corrections, name);
+        return corrected;
+    }
+
+    private static float ClampFinite(
+        float value,
+        float minimum,
+        float maximum,
+        float fallback,
+        string name,
+        ref StringBuilder summary,
+        ref int corrections)
+    {
+        float corrected = value;
+        if (float.IsNaN(corrected) || float.IsInfinity(corrected))
+            corrected = fallback;
+        if (corrected < minimum)
+            corrected = minimum;
+        if (corrected > maximum)
+            corrected = maximum;
+        if (corrected.Equals(value))
+            return corrected;
+
+        AddCorrection(ref summary, ref corrections, name);
+        return corrected;
+    }
+
+    private static int Clamp(
+        int value,
+        int minimum,
+        int maximum,
+        string name,
+        ref StringBuilder summary,
+        ref int corrections)
+    {
+        int corrected = Math.Max(minimum, Math.Min(maximum, value));
+        if (corrected == value)
+            return corrected;
+
+        AddCorrection(ref summary, ref corrections, name);
+        return corrected;
+    }
+
+    private static long Clamp(
+        long value,
+        long minimum,
+        long maximum,
+        string name,
+        ref StringBuilder summary,
+        ref int corrections)
+    {
+        long corrected = Math.Max(minimum, Math.Min(maximum, value));
+        if (corrected == value)
+            return corrected;
+
+        AddCorrection(ref summary, ref corrections, name);
+        return corrected;
+    }
+
+    private static void AddCorrection(
+        ref StringBuilder summary,
+        ref int corrections,
+        string name)
+    {
+        if (summary == null)
+            summary = new StringBuilder();
+        else
+            summary.Append(", ");
+
+        summary.Append(name);
+        corrections++;
+    }
 }

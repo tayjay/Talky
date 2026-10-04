@@ -2,6 +2,8 @@
 using LabApi.Features.Wrappers;
 using PlayerRoles;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
+using PlayerRoles.Voice;
+using Talky.Bridges;
 using Talky.Performance;
 using Talky.Settings;
 using Talky.Voice;
@@ -31,7 +33,9 @@ public sealed class SpeechTracker : MonoBehaviour
         new VoicePresentationState();
 
     private Player _player;
+    private VoiceModuleBase _decoderModule;
     private OpusDecoder _decoder;
+    private bool _decoderAccessFailureLogged;
     private SpeechLevel _lastLevel = SpeechLevel.Init;
     private EmotionPresetType _overridePreset = EmotionPresetType.Neutral;
     private float _overrideEndTime;
@@ -45,6 +49,8 @@ public sealed class SpeechTracker : MonoBehaviour
         new SpeechObservationCadence(SpeechRangeObservationSamples);
     private float _lastSourcePacketTime = -1f;
     private AudibleSpeechActivity _audibleSpeechActivity;
+    private double _cachedActivityFloorDecibels = double.NaN;
+    private double _cachedActivityFloorMeanSquare = double.NaN;
 
     internal int RuntimeIndex { get; set; } = -1;
     internal int RecentSpeakerIndex { get; set; } = -1;
@@ -65,6 +71,7 @@ public sealed class SpeechTracker : MonoBehaviour
         set => _voicePresentation.SetLastActivitySeconds(value);
     }
     public float CurrentVolumeRatio { get; private set; }
+    public float CurrentHeadBobDrive { get; private set; }
     public double RootMeanSquare => _energy.RootMeanSquare;
     public bool HasRollingSpeechRange => _speechPercentiles.IsReady;
     public int RollingSpeechObservationCount => _speechPercentiles.Count;
@@ -108,27 +115,58 @@ public sealed class SpeechTracker : MonoBehaviour
         }
     }
 
-    
     private OpusDecoder OpusDecoder
     {
         get
         {
-            if (_decoder != null)
-                return _decoder;
             if (_disposed || _player == null || _player.IsDestroyed)
+            {
+                ResetDecoderCache();
                 return null;
+            }
 
+            VoiceModuleBase module;
             try
             {
-                // Access relies on the publicized Assembly-CSharp reference and unsafe compilation.
-                _decoder = Player.VoiceModule?.Decoder;
+                module = _player.VoiceModule;
             }
             catch (Exception exception)
             {
-                Logger.Debug(exception, Plugin.Instance?.Config?.Debug == true);
+                _decoderModule = null;
+                _decoder = null;
+                LogDecoderAccessFailure(exception);
                 return null;
             }
 
+            if (module == null)
+            {
+                ResetDecoderCache();
+                return null;
+            }
+
+            // Role changes normally call OnSpawned, but also fence the cache by the
+            // actual module identity so a delayed lifecycle event cannot reuse a
+            // decoder owned by the previous role.
+            if (!ReferenceEquals(module, _decoderModule))
+            {
+                _decoderModule = module;
+                _decoder = null;
+                _decoderAccessFailureLogged = false;
+            }
+
+            if (_decoder != null)
+                return _decoder;
+
+            if (!VoiceDecoderBridge.TryGetDecoder(
+                    module,
+                    out _decoder,
+                    out Exception accessFailure))
+            {
+                LogDecoderAccessFailure(accessFailure);
+                return null;
+            }
+
+            _decoderAccessFailureLogged = false;
             return _decoder;
         }
     }
@@ -143,6 +181,7 @@ public sealed class SpeechTracker : MonoBehaviour
         if (player == null)
             return;
 
+        ResetDecoderCache();
         _disposed = false;
         _player = player;
         RefreshSettings();
@@ -173,10 +212,14 @@ public sealed class SpeechTracker : MonoBehaviour
 
     internal void OnSpawned(float now)
     {
+        ResetDecoderCache();
         RefreshSettings();
         OverrideEmotion(defaultPreset, 0.1f);
+        _decodeFailures = 0;
+        _decodeSuspendedUntil = 0f;
         LastPacketTime = -1f;
         CurrentVolumeRatio = 0f;
+        CurrentHeadBobDrive = 0f;
         _energy.Reset();
         ResetSpeechRangeObservationWindow();
         _voicePresentation.Reset();
@@ -226,6 +269,7 @@ public sealed class SpeechTracker : MonoBehaviour
                     ApplyEmotion(defaultPreset);
                     _lastLevel = SpeechLevel.Reset;
                     CurrentVolumeRatio = 0f;
+                    CurrentHeadBobDrive = 0f;
                 }
 
                 return;
@@ -247,6 +291,7 @@ public sealed class SpeechTracker : MonoBehaviour
                 _voicePresentation.AnimationHighDecibels,
                 MinimumAdaptiveVolumeRatio);
             CurrentVolumeRatio = animation.VolumeRatio;
+            CurrentHeadBobDrive = animation.HeadBobDrive;
             SpeechLevel level;
             switch (animation.Level)
             {
@@ -380,10 +425,10 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_disposed || source == null || source._disposed)
             return false;
 
-        double sourceRootMeanSquare = source.RootMeanSquare;
-        bool presented = _voicePresentation.TryPresent(
+        double sourceMeanSquare = source._energy.PresentationMeanSquare;
+        bool presented = _voicePresentation.TryPresentMeanSquare(
             decodedSamples,
-            sourceRootMeanSquare,
+            sourceMeanSquare,
             source._speechPercentiles.LowPercentileDecibels,
             source._speechPercentiles.HighPercentileDecibels,
             source._speechPercentiles.AnimationLowDecibels,
@@ -394,15 +439,32 @@ public sealed class SpeechTracker : MonoBehaviour
 
         Settings.Config config = Plugin.Instance?.Config;
         double activityFloor = NormalizeSpeechFloor(config?.LowDbThreshold ?? -80d);
-        bool audible = SpeechAnimationMath.IsAtOrAboveActivityFloor(
-            source._energy.Decibels,
-            activityFloor);
+        double activityFloorMeanSquare = GetActivityFloorMeanSquare(activityFloor);
+        bool audible = SpeechAnimationMath.IsMeanSquareAtOrAboveActivityFloor(
+            sourceMeanSquare,
+            activityFloorMeanSquare);
         _audibleSpeechActivity.Observe(now, audible);
         return true;
     }
 
     public void OverrideEmotion(EmotionPresetType preset, int durationMs) =>
         OverrideEmotion(preset, durationMs / 1000f);
+
+    public void SetDefaultPreset(EmotionPresetType preset, bool applyImmediately = false)
+    {
+        defaultPreset = preset;
+        if (!applyImmediately || _disposed || _player == null)
+            return;
+
+        if (_overrideEndTime > Time.time)
+            return;
+
+        // The setting write is rate-limited, but the next speech tick must still
+        // re-evaluate its current level instead of trusting the old emotion cache.
+        _lastLevel = SpeechLevel.Init;
+        _hasAppliedPreset = false;
+        ApplyEmotion(preset);
+    }
 
     public void OverrideEmotion(EmotionPresetType preset, float durationSeconds)
     {
@@ -434,6 +496,7 @@ public sealed class SpeechTracker : MonoBehaviour
 
     public void Reset()
     {
+        ResetDecoderCache();
         _energy.Reset();
         _speechPercentiles.Reset();
         ResetSpeechRangeObservationWindow();
@@ -442,6 +505,7 @@ public sealed class SpeechTracker : MonoBehaviour
         _decodeSuspendedUntil = 0f;
         ResetAudibleSpeech();
         CurrentVolumeRatio = 0f;
+        CurrentHeadBobDrive = 0f;
         _overrideEndTime = 0f;
         _lastLevel = SpeechLevel.Init;
         _hasAppliedPreset = false;
@@ -542,6 +606,38 @@ public sealed class SpeechTracker : MonoBehaviour
 
     private static bool IsFinite(double value) =>
         !double.IsNaN(value) && !double.IsInfinity(value);
+
+    private void ResetDecoderCache()
+    {
+        _decoderModule = null;
+        _decoder = null;
+        _decoderAccessFailureLogged = false;
+    }
+
+    private void LogDecoderAccessFailure(Exception exception)
+    {
+        if (_decoderAccessFailureLogged)
+            return;
+
+        _decoderAccessFailureLogged = true;
+        Logger.Error(
+            "Talky could not access the current role's voice decoder; " +
+            "voice analysis is unavailable for this packet and Talky will retry. " +
+            (exception?.GetType().Name ?? "Unknown error") + ": " +
+            (exception?.Message ?? "No diagnostic was supplied."));
+    }
+
+    private double GetActivityFloorMeanSquare(double activityFloorDecibels)
+    {
+        if (activityFloorDecibels != _cachedActivityFloorDecibels)
+        {
+            _cachedActivityFloorDecibels = activityFloorDecibels;
+            _cachedActivityFloorMeanSquare =
+                SpeechAnimationMath.MeanSquareFromDecibels(activityFloorDecibels);
+        }
+
+        return _cachedActivityFloorMeanSquare;
+    }
 
     private static double NormalizeSpeechFloor(double decibels)
     {

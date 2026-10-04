@@ -7,6 +7,7 @@ using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers.OverlayAnims;
 using Talky.Behaviours;
+using Talky.Bridges;
 using Talky.Performance;
 using UnityEngine;
 using UserSettings.ServerSpecific;
@@ -21,6 +22,9 @@ public sealed class SSTalkySettings
     private const int MaxEmotion = 6;
     private const float GrabCooldown = 1.111f;
     private const float EmotionCooldown = 0.5f;
+    private const bool EnableTalkingByDefault = true;
+
+    private static bool _grabAnimationAccessFailureLogged;
 
     // Edge state and cooldowns bound client-driven setting events.
     private readonly HashSet<uint> _grabHeld = new HashSet<uint>();
@@ -71,7 +75,7 @@ public sealed class SSTalkySettings
                 translations.SSEnableTalkingLabel,
                 translations.SSDisabled,
                 translations.SSEnabled,
-                true,
+                EnableTalkingByDefault,
                 translations.SSEnableTalkingHint);
 
             _ownedSettings = new ServerSpecificSettingBase[]
@@ -184,16 +188,46 @@ public sealed class SSTalkySettings
         if (hub == null || _enableTalking == null)
             return true;
 
-        SSTwoButtonsSetting setting =
-            ServerSpecificSettingsSync.GetSettingOfUser<SSTwoButtonsSetting>(
+        SSTwoButtonsSetting setting;
+        bool hasReceivedSetting =
+            ServerSpecificSettingsSync.TryGetSettingOfUser(
                 hub,
-                _enableTalking.SettingId);
-        return setting?.SyncIsB ?? true;
+                _enableTalking.SettingId,
+                out setting);
+        return ResolveEnableTalking(hasReceivedSetting, setting);
+    }
+
+    private static bool ResolveEnableTalking(
+        bool hasReceivedSetting,
+        SSTwoButtonsSetting setting)
+    {
+        return !hasReceivedSetting || setting == null
+            ? EnableTalkingByDefault
+            : setting.SyncIsB;
     }
 
     private void ProcessUserInput(ReferenceHub hub, ServerSpecificSettingBase setting)
     {
         // Keep this handler exception-free because the setting event is a global multicast.
+        try
+        {
+            ProcessUserInputCore(hub, setting);
+        }
+        catch (Exception exception)
+        {
+            try
+            {
+                Logger.Error("Failed to process server-specific settings input: " + exception);
+            }
+            catch
+            {
+                // Do not let diagnostic logging break the global multicast either.
+            }
+        }
+    }
+
+    private void ProcessUserInputCore(ReferenceHub hub, ServerSpecificSettingBase setting)
+    {
         if (!_active || hub == null || setting == null)
             return;
 
@@ -242,11 +276,12 @@ public sealed class SSTalkySettings
             EmotionPresetType preset = (EmotionPresetType)selection;
 
             // Update the spawn default immediately; rate-limit only the replicated write.
+            SpeechTracker tracker = null;
             if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
                     networkId,
-                    out SpeechTracker tracker) == true)
+                    out tracker) == true)
             {
-                tracker.defaultPreset = preset;
+                tracker.SetDefaultPreset(preset);
             }
 
             if (_nextEmotionAt.TryGetValue(networkId, out float emotionReadyAt) &&
@@ -258,8 +293,14 @@ public sealed class SSTalkySettings
             _nextEmotionAt[networkId] = now + EmotionCooldown;
             Player player = Player.Get(hub);
 
-            if (player != null && !player.IsDestroyed && player.Emotion != preset)
+            if (tracker != null)
+            {
+                tracker.SetDefaultPreset(preset, applyImmediately: true);
+            }
+            else if (player != null && !player.IsDestroyed && player.Emotion != preset)
+            {
                 player.Emotion = preset;
+            }
 
             return;
         }
@@ -289,18 +330,32 @@ public sealed class SSTalkySettings
         if (player == null || player.IsDestroyed || player.ReferenceHub == null)
             return;
 
-        // Publicized private-field access is version-sensitive, so validate the expected slot.
         if (!(player.ReferenceHub.roleManager.CurrentRole is IFpcRole currentRole) ||
             !(currentRole.FpcModule.CharacterModelInstance is AnimatedCharacterModel model) ||
-            !model.TryGetSubcontroller(out OverlayAnimationsSubcontroller subcontroller) ||
-            subcontroller._overlayAnimations == null ||
-            subcontroller._overlayAnimations.Length <= 1 ||
-            subcontroller._overlayAnimations[1] == null)
+            !model.TryGetSubcontroller(out OverlayAnimationsSubcontroller subcontroller))
         {
             return;
         }
 
-        OverlayAnimationsBase animation = subcontroller._overlayAnimations[1];
+        if (!OverlayAnimationBridge.TryGetGrabAnimation(
+                subcontroller,
+                out object animationValue,
+                out Exception accessFailure))
+        {
+            if (accessFailure != null && !_grabAnimationAccessFailureLogged)
+            {
+                _grabAnimationAccessFailureLogged = true;
+                Logger.Error(
+                    "The grab animation is unavailable through the runtime metadata bridge: " +
+                    accessFailure);
+            }
+
+            return;
+        }
+
+        if (!(animationValue is OverlayAnimationsBase animation))
+            return;
+
         animation.OnStarted();
         animation.SendRpc();
 

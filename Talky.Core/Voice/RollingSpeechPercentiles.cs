@@ -303,13 +303,26 @@ public enum SpeechAnimationLevel
 public readonly struct SpeechAnimationDecision
 {
     public SpeechAnimationDecision(SpeechAnimationLevel level, float volumeRatio)
+        : this(
+            level,
+            volumeRatio,
+            SpeechAnimationMath.CalculateHeadBobDrive(volumeRatio))
+    {
+    }
+
+    public SpeechAnimationDecision(
+        SpeechAnimationLevel level,
+        float volumeRatio,
+        float headBobDrive)
     {
         Level = level;
         VolumeRatio = volumeRatio;
+        HeadBobDrive = headBobDrive;
     }
 
     public SpeechAnimationLevel Level { get; }
     public float VolumeRatio { get; }
+    public float HeadBobDrive { get; }
 }
 
 /// <summary>
@@ -317,6 +330,8 @@ public readonly struct SpeechAnimationDecision
 /// </summary>
 public static class SpeechAnimationMath
 {
+    public const float HeadBobNeutralVolumeRatio = 0.25f;
+
     public static SpeechAnimationDecision Evaluate(
         double currentDecibels,
         double fallbackLowDecibels,
@@ -375,6 +390,21 @@ public static class SpeechAnimationMath
     }
 
     /// <summary>
+    /// Maps the public 0..1 presentation ratio to signed head-bob drive.
+    /// Silent input remains exactly zero; quiet audible input may intentionally
+    /// produce a small negative pitch below the neutral ratio.
+    /// </summary>
+    public static float CalculateHeadBobDrive(float volumeRatio)
+    {
+        if (float.IsNaN(volumeRatio) || float.IsInfinity(volumeRatio) || volumeRatio <= 0f)
+            return 0f;
+
+        if (volumeRatio > 1f)
+            volumeRatio = 1f;
+        return volumeRatio - HeadBobNeutralVolumeRatio;
+    }
+
+    /// <summary>
     /// Aligns comparisons with the percentile histogram's 1 dB bins.
     /// </summary>
     public static double QuantizeForPercentileComparison(double decibels)
@@ -399,6 +429,20 @@ public static class SpeechAnimationMath
         IsFinite(decibels) &&
         IsFinite(activityFloorDecibels) &&
         decibels >= activityFloorDecibels;
+
+    public static double MeanSquareFromDecibels(double decibels) =>
+        IsFinite(decibels)
+            ? Math.Pow(10d, decibels / 10d)
+            : double.NaN;
+
+    public static bool IsMeanSquareAtOrAboveActivityFloor(
+        double meanSquare,
+        double activityFloorMeanSquare) =>
+        IsFinite(meanSquare) &&
+        meanSquare >= 0d &&
+        IsFinite(activityFloorMeanSquare) &&
+        activityFloorMeanSquare >= 0d &&
+        meanSquare >= activityFloorMeanSquare;
 
     private static bool IsFinite(double value) =>
         !double.IsNaN(value) && !double.IsInfinity(value);

@@ -13,6 +13,7 @@ public enum PerformanceMetric
     EnergyUpdate = 2,
     FaceBatch = 3,
     LookBatch = 4,
+    // Exact CalculateGlanceLook work summed across one scheduled glance batch.
     GlanceBatch = 5,
     DirectRoleSync = 6,
     CedModRoleSync = 7,
@@ -50,7 +51,15 @@ public enum PerformanceCounter
     LookTicks = 21,
     GlanceTicks = 22,
     GlanceSelections = 23,
-    Count = 24,
+    LookSelectorCalls = 24,
+    LookSelectorPassThroughs = 25,
+    LookSelectorRewrites = 26,
+    LookSelectorScratchAllocations = 27,
+    LookSelectorFailures = 28,
+    ManualLookDetections = 29,
+    ManualLookSuppressedTicks = 30,
+    ZeroCorrectionRewrites = 31,
+    Count = 32,
 }
 
 /// <summary>

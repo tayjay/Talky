@@ -15,7 +15,6 @@ public sealed class TalkyPerformanceMonitor : IDisposable
     public const int SyncSampleEvery = PerformanceMetricCatalog.SyncSampleEvery;
 
     private const int HistorySeconds = 60;
-    private const double SummaryFallbackSeconds = 300d;
     private const double FloorWarningIntervalSeconds = 300d;
 
     private Config _config;
@@ -76,6 +75,9 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
     public bool IsFrozen => _frozen || _governor.IsFrozen;
 
+    internal bool IsDurationRecordingEnabled =>
+        !_frozen && !_governor.IsFrozen && _profilingEnabled;
+
     /// <summary>
     /// Starts a sampled measurement using the metric catalog cadence unless overridden.
     /// A negative result means the invocation was not sampled.
@@ -99,6 +101,12 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
         _ = weight;
         _profiler.EndSample(metric, started);
+    }
+
+    internal void RecordDurationTicks(PerformanceMetric metric, long elapsedTicks)
+    {
+        if (IsDurationRecordingEnabled && elapsedTicks >= 0L)
+            _profiler.RecordDurationTicks(metric, elapsedTicks);
     }
 
     public void Count(PerformanceCounter counter)
@@ -472,11 +480,9 @@ public sealed class TalkyPerformanceMonitor : IDisposable
 
     private void TryLogSummary(double nowSeconds)
     {
-        double interval = _governor.Settings.SummaryLogIntervalSeconds;
-        if (interval == 0d)
+        int interval = _governor.Settings.SummaryLogIntervalSeconds;
+        if (interval <= 0)
             return;
-        if (!IsFinite(interval) || interval < 0d)
-            interval = SummaryFallbackSeconds;
 
         if (nowSeconds - _summary.StartedAt < interval)
             return;
@@ -488,13 +494,18 @@ public sealed class TalkyPerformanceMonitor : IDisposable
                     ? _governor.Settings.FixedTier
                     : PerformanceTier.Full;
 
-            Logger.Info(_summary.CreateLogMessage(
+            string summary = _summary.CreateLogMessage(
                 _governor.Settings.Mode,
                 configuredTier,
                 Tier,
                 _governor.CommittedTier,
                 _governor.IsRecoveryProbeActive,
-                _lastTransitionReason));
+                _lastTransitionReason);
+            Plugin plugin = Plugin.Instance;
+            Logger.Info(
+                summary +
+                $" look_sync_mode={plugin?.LookSyncMode.ToString() ?? "unavailable"}, " +
+                $"look_sync_patch=[{plugin?.LookSyncPatchDetail ?? "unavailable"}].");
         }
 
         _summary.Reset(nowSeconds);

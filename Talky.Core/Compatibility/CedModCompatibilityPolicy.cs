@@ -16,6 +16,7 @@ public enum CedModLookSyncMode
     StockSync = 0,
     CedModFakeSync = 1,
     CedModUnsupported = 2,
+    StockHarmony = 3,
 }
 
 public enum CedModCompatibilityReason
@@ -26,6 +27,7 @@ public enum CedModCompatibilityReason
     ConfigurationUnreadable = 3,
     MultipleInstallations = 4,
     PatchUnavailable = 5,
+    HarmonyPreferenceDisabled = 6,
 }
 
 public readonly struct CedModSelection
@@ -51,6 +53,7 @@ public readonly struct CedModLookSyncPlan
     public CedModLookSyncMode Mode { get; }
     public CedModCompatibilityReason Reason { get; }
     public bool UseStockEvents => Mode == CedModLookSyncMode.StockSync;
+    public bool UseStockPatch => Mode == CedModLookSyncMode.StockHarmony;
     public bool UseCedModPatch => Mode == CedModLookSyncMode.CedModFakeSync;
 }
 
@@ -144,6 +147,17 @@ public static class CedModCompatibilityPolicy
         CedModSelection selection,
         bool patchApplied)
     {
+        // Preserve the original contract: stock selections use the event path,
+        // while CedMod fake sync consumes the supplied patch result.
+        bool preferHarmonyLookSync = selection.State == CedModPluginState.FakeSync;
+        return Resolve(selection, preferHarmonyLookSync, patchApplied);
+    }
+
+    public static CedModLookSyncPlan Resolve(
+        CedModSelection selection,
+        bool preferHarmonyLookSync,
+        bool patchApplied)
+    {
         if (!IsCoherent(selection))
         {
             return new CedModLookSyncPlan(
@@ -155,10 +169,28 @@ public static class CedModCompatibilityPolicy
         {
             case CedModPluginState.NotPresent:
             case CedModPluginState.StockSync:
-                return new CedModLookSyncPlan(
-                    CedModLookSyncMode.StockSync,
-                    selection.Reason);
+                if (!preferHarmonyLookSync)
+                {
+                    return new CedModLookSyncPlan(
+                        CedModLookSyncMode.StockSync,
+                        selection.Reason);
+                }
+
+                return patchApplied
+                    ? new CedModLookSyncPlan(
+                        CedModLookSyncMode.StockHarmony,
+                        selection.Reason)
+                    : new CedModLookSyncPlan(
+                        CedModLookSyncMode.CedModUnsupported,
+                        CedModCompatibilityReason.PatchUnavailable);
             case CedModPluginState.FakeSync:
+                if (!preferHarmonyLookSync)
+                {
+                    return new CedModLookSyncPlan(
+                        CedModLookSyncMode.CedModUnsupported,
+                        CedModCompatibilityReason.HarmonyPreferenceDisabled);
+                }
+
                 return patchApplied
                     ? new CedModLookSyncPlan(
                         CedModLookSyncMode.CedModFakeSync,

@@ -66,6 +66,7 @@ if ([int] $provenance.schemaVersion -ne 1) {
     throw "Unsupported provenance schema '$($provenance.schemaVersion)'."
 }
 Assert-Equal -Label 'provenance configuration' -Expected $Configuration -Actual ([string] $provenance.build.configuration)
+Assert-Equal -Label 'canonical build configuration' -Expected 'Release' -Actual ([string] $provenance.build.canonicalConfiguration)
 Assert-Equal -Label 'provenance platform' -Expected 'x64' -Actual ([string] $provenance.build.platform)
 Assert-Equal -Label 'provenance solution' -Expected 'Talky.sln' -Actual ([string] $provenance.build.solution)
 Assert-Equal -Label 'provenance artifact name' -Expected $expectedArtifactName -Actual ([string] $provenance.artifact.name)
@@ -79,8 +80,10 @@ if (-not [bool] $provenance.build.deterministicRequested -or
     -not [bool] $provenance.build.testsPassed -or
     -not [bool] $provenance.build.artifactValidationPassed -or
     [int] $provenance.build.deterministicAssertionCount -le 0 -or
+    [int] $provenance.build.harmonyPatchAssertionCount -le 0 -or
     [int] $provenance.build.reproducibility.pinnedToolchainRebuilds -ne 2 -or
-    -not [bool] $provenance.build.reproducibility.artifactByteIdentical) {
+    -not [bool] $provenance.build.reproducibility.artifactByteIdentical -or
+    -not [bool] $provenance.build.reproducibility.canonicalLaneCopyVerified) {
     throw 'Provenance must attest deterministic, safe, non-deploying rebuild and passing tests.'
 }
 
@@ -93,6 +96,21 @@ if (-not [bool] $provenance.inputs.packageSignatureVerified) {
 if (-not [bool] $provenance.inputs.packageOriginsVerified) {
     throw 'Deployment-grade packages require live byte-identical signed NuGet origin verification for every direct reference purl.'
 }
+$harmonyPatchRuntime = $provenance.verification.harmonyPatchRuntime
+if ($null -eq $harmonyPatchRuntime -or
+    [string] $harmonyPatchRuntime.fileName -ne 'Assembly-CSharp.dll' -or
+    [string] $harmonyPatchRuntime.sha256 -notmatch '^[0-9A-F]{64}$' -or
+    [long] $harmonyPatchRuntime.size -le 0 -or
+    [string] $harmonyPatchRuntime.mvid -notmatch '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$' -or
+    [string] $harmonyPatchRuntime.patchTestReportedSha256 -notmatch '^[0-9A-F]{64}$' -or
+    [long] $harmonyPatchRuntime.patchTestReportedSize -le 0 -or
+    [string] $harmonyPatchRuntime.patchTestReportedMvid -notmatch '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$' -or
+    -not [bool] $harmonyPatchRuntime.unchangedDuringPatchTest) {
+    throw 'Package provenance does not attest the supplied runtime used by Harmony patch tests.'
+}
+Assert-Equal -Label 'Harmony patch-test reported runtime SHA-256' -Expected ([string] $harmonyPatchRuntime.sha256) -Actual ([string] $harmonyPatchRuntime.patchTestReportedSha256)
+Assert-Equal -Label 'Harmony patch-test reported runtime size' -Expected ([string] $harmonyPatchRuntime.size) -Actual ([string] $harmonyPatchRuntime.patchTestReportedSize)
+Assert-Equal -Label 'Harmony patch-test reported runtime MVID' -Expected ([string] $harmonyPatchRuntime.mvid) -Actual ([string] $harmonyPatchRuntime.patchTestReportedMvid)
 if (-not [bool] $provenance.verification.advisoryScan.performed -or
     -not [bool] $provenance.verification.advisoryScan.clean -or
     -not [bool] $provenance.verification.advisoryScan.componentCoverageComplete -or
