@@ -161,6 +161,19 @@ public sealed class TalkyRuntime : IDisposable
     public void ApplyPolicy(TalkyRuntimePolicy policy)
     {
         TalkyRuntimePolicy next = policy ?? TalkyRuntimePolicy.FromConfig(Plugin.Instance?.Config);
+        bool lookSyncAvailable = Plugin.Instance?.IsLookSyncAvailable == true;
+        if (!lookSyncAvailable)
+        {
+            next = new TalkyRuntimePolicy(
+                next.SpeechInterval,
+                next.LookInterval,
+                next.GlanceInterval,
+                false,
+                false,
+                false);
+            _activeLookTargets.Clear();
+        }
+
         _policy = next;
         ResetDeadlines(Time.time);
 
@@ -177,7 +190,7 @@ public sealed class TalkyRuntime : IDisposable
                 continue;
 
             if (!next.EnableHeadMotion)
-                look.ClearOffsets();
+                look.ClearOffsets(lookSyncAvailable);
             else if (!next.EnableGlancing)
                 look.ClearGlanceOffset();
 
@@ -485,7 +498,7 @@ public sealed class TalkyRuntime : IDisposable
             {
                 ProcessPendingConsumables(now);
                 ProcessPendingEmotions(now);
-                if (!_policy.EnableHeadMotion)
+                if (!_policy.EnableHeadMotion && _activeLookTargets.Count != 0)
                     ExpirePendingLookCorrections(Time.frameCount);
             }
             finally
@@ -539,7 +552,7 @@ public sealed class TalkyRuntime : IDisposable
                 _glancePending = false;
             }
 
-            if (evaluateGlance || now >= _nextRecentPrune)
+            if (_policy.EnableGlancing && (evaluateGlance || now >= _nextRecentPrune))
             {
                 schedulerStarted = monitor?.Begin(PerformanceMetric.SchedulerOverhead, 1) ??
                                    PerformanceProfiler.NotSampled;

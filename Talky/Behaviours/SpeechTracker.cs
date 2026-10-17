@@ -551,10 +551,14 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_hasAppliedPreset && _appliedPreset == preset)
             return;
 
-        _player.Emotion = preset;
+        bool emotionChanged = _player.Emotion != preset;
+        if (emotionChanged)
+            _player.Emotion = preset;
+
         _appliedPreset = preset;
         _hasAppliedPreset = true;
-        Plugin.Instance?.Runtime?.RecordEmotionWrite();
+        if (emotionChanged)
+            Plugin.Instance?.Runtime?.RecordEmotionWrite();
     }
 
     private static void ConfigSnapshot(out int resetTime, out double lowThreshold, out double highThreshold)

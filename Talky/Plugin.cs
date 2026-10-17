@@ -29,6 +29,9 @@ public class Plugin : Plugin<Config>
     public string LookSyncPatchDetail { get; private set; } = "not initialized";
     public static Plugin Instance { get; private set; }
 
+    internal bool IsLookSyncAvailable =>
+        _fullyEnabled && LookSyncMode != CedModLookSyncMode.CedModUnsupported;
+
     private CoroutineHandle _postEnableHandle;
     private int _lifecycleGeneration;
     private bool _enabled;
@@ -408,6 +411,7 @@ public class Plugin : Plugin<Config>
             LookSyncMode = plan.Mode;
             LookSyncPatchDetail = patchDetail;
             _fullyEnabled = true;
+            ApplyCurrentPerformancePolicy();
 
             LogCedModCompatibility(
                 labApiProbe,
@@ -451,6 +455,7 @@ public class Plugin : Plugin<Config>
                 LookSyncMode = CedModLookSyncMode.CedModUnsupported;
                 LookSyncPatchDetail = "post-enable recovery disabled outbound look sync";
                 _fullyEnabled = true;
+                ApplyCurrentPerformancePolicy();
                 Logger.Error(
                     "Recovered in common-events-only mode; outbound head-sync " +
                     "rewriting is disabled, while other Talky features remain enabled.");
@@ -513,6 +518,7 @@ public class Plugin : Plugin<Config>
     {
         LookSyncMode = CedModLookSyncMode.CedModUnsupported;
         LookSyncPatchDetail = detail;
+        ApplyCurrentPerformancePolicy();
         Logger.Error(
             "Outbound head-sync rewriting was disabled for this Talky lifecycle; " +
             "voice and face features remain enabled. " + detail +

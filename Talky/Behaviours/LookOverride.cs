@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Stopwatch = System.Diagnostics.Stopwatch;
 using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
@@ -321,7 +322,8 @@ public sealed class LookOverride : MonoBehaviour
     {
         Config config = TalkyConfig;
         if (_disposed || config == null ||
-            Plugin.Instance?.Runtime?.IsEnabled != true)
+            Plugin.Instance?.Runtime?.IsEnabled != true ||
+            Plugin.Instance.Runtime.Policy.EnableHeadMotion != true)
             return;
 
         _reactOffset = new Vector2(0f, Math.Min(config.HeadBobAmount, damage));
@@ -384,7 +386,7 @@ public sealed class LookOverride : MonoBehaviour
         Dispose();
     }
 
-    private void ClearOffsets(bool notifyRuntime)
+    internal void ClearOffsets(bool notifyRuntime)
     {
         Vector2 correctionSource = CurrentCorrectionSource();
         bool preservePendingCorrection =
@@ -480,11 +482,14 @@ public sealed class LookOverride : MonoBehaviour
     private int CalculateGlanceLook(List<SpeechTracker> recentSpeakers, float now)
     {
         Config config = TalkyConfig;
-        if (config == null || recentSpeakers == null || recentSpeakers.Count == 0 ||
-            _player.Camera == null)
+        if (config == null || recentSpeakers == null || recentSpeakers.Count == 0)
         {
             return 0;
         }
+
+        Transform camera = _player.Camera;
+        if (camera == null)
+            return 0;
 
         float maxDistance = config.GlaceRange;
         if (maxDistance <= 0f)
@@ -492,8 +497,8 @@ public sealed class LookOverride : MonoBehaviour
 
         float minFrontDot = Mathf.Cos(0.5f * config.GlaceFov * Mathf.Deg2Rad);
         float maxDistSqr = maxDistance * maxDistance;
+        uint viewerNetworkId = _player.NetworkId;
         Vector3 myPos = _player.Position;
-        Transform camera = _player.Camera;
         Vector3 cameraPosition = camera.position;
         Vector3 cameraForward = camera.forward;
 
@@ -508,7 +513,7 @@ public sealed class LookOverride : MonoBehaviour
         {
             SpeechTracker tracker = recentSpeakers[i];
             if (tracker == null || tracker.Player == null ||
-                tracker.Player.NetworkId == _player.NetworkId ||
+                tracker.Player.NetworkId == viewerNetworkId ||
                 !tracker.HasGlanceSnapshot ||
                 !tracker.WasRecentlySpeaking(now, config.GlanceMaxDuration))
             {
@@ -533,8 +538,7 @@ public sealed class LookOverride : MonoBehaviour
             if (frontDot < minFrontDot)
                 continue;
 
-            float distance = Mathf.Sqrt(distanceSqr);
-            float score = 0.8f * frontDot - 0.2f * (distance / maxDistance);
+            float score = CalculateGlanceScore(frontDot, distanceSqr, maxDistance, bestScore);
             if (score <= bestScore)
                 continue;
 
@@ -565,6 +569,20 @@ public sealed class LookOverride : MonoBehaviour
             Mathf.Clamp(yaw, -config.GlanceMaxYaw, config.GlanceMaxYaw),
             Mathf.Clamp(pitch, -config.GlanceMaxPitch, config.GlanceMaxPitch)) * intensity;
         return candidates;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static float CalculateGlanceScore(
+        float frontDot, float distanceSquared, float maxDistance, float bestScore)
+    {
+        float frontScore = 0.8f * frontDot;
+        // Distance only lowers the score, so this candidate cannot beat the winner.
+        // Ambiguous non-finite or invalid inputs use the original arithmetic below.
+        if (frontScore <= bestScore && frontScore < float.PositiveInfinity &&
+            distanceSquared >= 0f && distanceSquared < float.PositiveInfinity && maxDistance > 0f)
+            return bestScore;
+
+        return frontScore - 0.2f * (Mathf.Sqrt(distanceSquared) / maxDistance);
     }
 
     private Vector2 GetLookGoal() => _headBobOffset + _glanceOffset + _reactOffset;

@@ -12,6 +12,7 @@ internal static class ExiledBridge
     {
         bool loaderPresent = false;
         bool apiPresent = false;
+        // Don't use LINQ here because it exposes Exiled types beyond "NoInlining".
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
             string name = assembly.GetName().Name;
