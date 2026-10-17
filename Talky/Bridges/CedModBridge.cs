@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Reflection.Emit;
 using Talky.Compatibility;
 
 namespace Talky.Bridges;
@@ -39,6 +40,8 @@ internal sealed class CedModRuntimeProbe
 internal static class CedModBridge
 {
     internal const string PluginTypeName = "CedMod.CedModMain";
+    private static readonly Dictionary<Type, Func<object, bool>> ConfigurationReaders =
+        new Dictionary<Type, Func<object, bool>>();
 
     public static CedModRuntimeProbe ProbeCandidates(
         IEnumerable<object> candidates,
@@ -75,7 +78,10 @@ internal static class CedModBridge
 
             Type pluginType = match.GetType();
             Assembly assembly = pluginType.Assembly;
-            CedModPluginState state = CedModCompatibilityPolicy.Inspect(match);
+            Func<object, bool> reader = GetConfigurationReader(pluginType);
+            CedModPluginState state = reader == null
+                ? CedModPluginState.Unreadable
+                : CedModCompatibilityPolicy.Inspect(() => reader(match));
             Version version = assembly.GetName().Version;
             return new CedModRuntimeProbe(
                 state,
@@ -92,6 +98,60 @@ internal static class CedModBridge
                 null,
                 null,
                 "discovery failed: " + exception.GetType().Name + ": " + exception.Message);
+        }
+    }
+
+    // CedMod is optional and has no shared typed configuration interface. Bind its public
+    // contract once using the metadata needed for Harmony integration; runtime reads are
+    // ordinary getter calls in the emitted delegate, never PropertyInfo.GetValue/Invoke.
+    internal static Func<object, bool> GetConfigurationReader(Type pluginType)
+    {
+        lock (ConfigurationReaders)
+        {
+            if (ConfigurationReaders.TryGetValue(pluginType, out Func<object, bool> cached))
+                return cached;
+
+            Func<object, bool> reader = null;
+            try
+            {
+                Type current = pluginType;
+                string[] path = { "Config", "CedMod", "DisableFakeSyncing" };
+                MethodInfo[] getters = new MethodInfo[path.Length];
+                for (int index = 0; index < path.Length; index++)
+                {
+                    MethodInfo getter = current.GetProperty(
+                            path[index], BindingFlags.Instance | BindingFlags.Public)
+                        ?.GetGetMethod();
+                    if (getter == null || getter.IsStatic || getter.GetParameters().Length != 0 ||
+                        getter.ReturnType.IsByRef || getter.ReturnType.IsPointer ||
+                        (index < path.Length - 1 && getter.ReturnType.IsValueType) ||
+                        (index == path.Length - 1 && getter.ReturnType != typeof(bool)))
+                    {
+                        return ConfigurationReaders[pluginType] = null;
+                    }
+
+                    getters[index] = getter;
+                    current = getter.ReturnType;
+                }
+
+                DynamicMethod method = new DynamicMethod(
+                    "ReadCedModDisableFakeSyncing", typeof(bool), new[] { typeof(object) },
+                    typeof(CedModBridge).Module, false);
+                ILGenerator il = method.GetILGenerator();
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Castclass, pluginType);
+                foreach (MethodInfo getter in getters)
+                    il.Emit(OpCodes.Callvirt, getter);
+                il.Emit(OpCodes.Ret);
+                reader = (Func<object, bool>)method.CreateDelegate(typeof(Func<object, bool>));
+            }
+            catch
+            {
+                // Unknown CedMod contracts disable rewriting rather than guessing offsets.
+            }
+
+            ConfigurationReaders[pluginType] = reader;
+            return reader;
         }
     }
 }

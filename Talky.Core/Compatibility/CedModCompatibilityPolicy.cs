@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 
 namespace Talky.Compatibility;
 
@@ -59,39 +58,14 @@ public readonly struct CedModLookSyncPlan
 
 public static class CedModCompatibilityPolicy
 {
-    private static readonly string[] DisableFakeSyncingPath =
+    public static CedModPluginState Inspect(Func<bool> readDisableFakeSyncing)
     {
-        "Config",
-        "CedMod",
-        "DisableFakeSyncing",
-    };
-
-    public static CedModPluginState Inspect(object candidate)
-    {
-        if (candidate == null)
+        if (readDisableFakeSyncing == null)
             return CedModPluginState.NotPresent;
 
         try
         {
-            object current = candidate;
-            for (int i = 0; i < DisableFakeSyncingPath.Length; i++)
-            {
-                if (current == null)
-                    return CedModPluginState.Unreadable;
-
-                PropertyInfo property = current.GetType().GetProperty(
-                    DisableFakeSyncingPath[i],
-                    BindingFlags.Instance | BindingFlags.Public);
-                if (property == null || property.GetIndexParameters().Length != 0)
-                    return CedModPluginState.Unreadable;
-
-                current = property.GetValue(current);
-            }
-
-            if (!(current is bool disableFakeSyncing))
-                return CedModPluginState.Unreadable;
-
-            return disableFakeSyncing
+            return readDisableFakeSyncing()
                 ? CedModPluginState.StockSync
                 : CedModPluginState.FakeSync;
         }
@@ -158,11 +132,31 @@ public static class CedModCompatibilityPolicy
         bool preferHarmonyLookSync,
         bool patchApplied)
     {
+        // Callers without an explicit absence/ownership observation retain the
+        // conservative patch-failure behavior.
+        return Resolve(selection, preferHarmonyLookSync, patchApplied, true, false);
+    }
+
+    public static CedModLookSyncPlan Resolve(
+        CedModSelection selection,
+        bool preferHarmonyLookSync,
+        bool patchApplied,
+        bool harmonyPresent,
+        bool patchOwnershipPossible)
+    {
         if (!IsCoherent(selection))
         {
             return new CedModLookSyncPlan(
                 CedModLookSyncMode.CedModUnsupported,
                 CedModCompatibilityReason.ConfigurationUnreadable);
+        }
+
+        if ((patchOwnershipPossible && (!preferHarmonyLookSync || !patchApplied)) ||
+            (patchApplied && !harmonyPresent))
+        {
+            return new CedModLookSyncPlan(
+                CedModLookSyncMode.CedModUnsupported,
+                CedModCompatibilityReason.PatchUnavailable);
         }
 
         switch (selection.State)
@@ -174,6 +168,16 @@ public static class CedModCompatibilityPolicy
                     return new CedModLookSyncPlan(
                         CedModLookSyncMode.StockSync,
                         selection.Reason);
+                }
+
+                if (!patchApplied && !harmonyPresent && !patchOwnershipPossible)
+                {
+                    // The stock event path is safe when no Harmony implementation
+                    // can hold Talky patches. An installed but incompatible runtime
+                    // still fails closed below.
+                    return new CedModLookSyncPlan(
+                        CedModLookSyncMode.StockSync,
+                        CedModCompatibilityReason.PatchUnavailable);
                 }
 
                 return patchApplied

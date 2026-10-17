@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Talky.Compatibility;
 
 namespace Talky.Tests;
@@ -15,6 +15,7 @@ internal static class CedModCompatibilityTests
         TestEnumValueStability();
         TestModeResolution();
         TestHarmonyModeResolution();
+        TestHarmonyAbsenceResolution();
         TestLookSyncSelectionPolicy();
         TestPerInvocationRewriteState();
         TestRewriteCommitCoherence();
@@ -29,27 +30,27 @@ internal static class CedModCompatibilityTests
             "Missing CedMod is not present");
         Equal(
             CedModPluginState.StockSync,
-            CedModCompatibilityPolicy.Inspect(new Candidate(true)),
+            CedModCompatibilityPolicy.Inspect(() => new Candidate(true).Config.CedMod.DisableFakeSyncing),
             "DisableFakeSyncing true selects stock sync");
         Equal(
             CedModPluginState.FakeSync,
-            CedModCompatibilityPolicy.Inspect(new Candidate(false)),
+            CedModCompatibilityPolicy.Inspect(() => new Candidate(false).Config.CedMod.DisableFakeSyncing),
             "DisableFakeSyncing false selects fake sync");
         Equal(
             CedModPluginState.Unreadable,
-            CedModCompatibilityPolicy.Inspect(new NullConfigCandidate()),
+            CedModCompatibilityPolicy.Inspect(() => throw new NullReferenceException()),
             "Null CedMod config fails closed");
         Equal(
             CedModPluginState.Unreadable,
-            CedModCompatibilityPolicy.Inspect(new MissingPathCandidate()),
+            CedModCompatibilityPolicy.Inspect(() => throw new MissingMemberException()),
             "Missing CedMod config path fails closed");
         Equal(
             CedModPluginState.Unreadable,
-            CedModCompatibilityPolicy.Inspect(new WrongLeafCandidate()),
+            CedModCompatibilityPolicy.Inspect(() => throw new InvalidCastException()),
             "Non-boolean CedMod setting fails closed");
         Equal(
             CedModPluginState.Unreadable,
-            CedModCompatibilityPolicy.Inspect(new ThrowingCandidate()),
+            CedModCompatibilityPolicy.Inspect(() => { _ = new ThrowingCandidate().Config; return false; }),
             "Throwing CedMod getter fails closed");
     }
 
@@ -158,6 +159,61 @@ internal static class CedModCompatibilityTests
             CedModCompatibilityReason.ConfigurationUnreadable,
             plan.Reason,
             "Incoherent selection reports unreadable compatibility state");
+    }
+
+    private static void TestHarmonyAbsenceResolution()
+    {
+        CedModSelection absentCedMod = new CedModSelection(
+            CedModPluginState.NotPresent,
+            CedModCompatibilityReason.NotPresent);
+        CedModSelection stockCedMod = new CedModSelection(
+            CedModPluginState.StockSync,
+            CedModCompatibilityReason.FakeSyncDisabled);
+        CedModSelection fakeCedMod = new CedModSelection(
+            CedModPluginState.FakeSync,
+            CedModCompatibilityReason.FakeSyncEnabled);
+
+        CedModLookSyncPlan plan = CedModCompatibilityPolicy.Resolve(
+            absentCedMod, true, false, false, false);
+        Equal(CedModLookSyncMode.StockSync, plan.Mode,
+            "A truly absent unowned Harmony runtime permits the stock event fallback");
+        Equal(CedModCompatibilityReason.PatchUnavailable, plan.Reason,
+            "The absence fallback reports why the preferred patch is unavailable");
+        True(plan.UseStockEvents && !plan.UseStockPatch && !plan.UseCedModPatch,
+            "Harmony absence activates only the stock event hook");
+
+        plan = CedModCompatibilityPolicy.Resolve(stockCedMod, true, false, false, false);
+        Equal(CedModLookSyncMode.StockSync, plan.Mode,
+            "CedMod with fake syncing disabled can use events when Harmony is absent");
+        plan = CedModCompatibilityPolicy.Resolve(fakeCedMod, true, false, false, false);
+        Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode,
+            "Harmony absence cannot enable stock events over CedMod fake syncing");
+
+        plan = CedModCompatibilityPolicy.Resolve(absentCedMod, true, false, true, false);
+        Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode,
+            "A present but incompatible Harmony runtime remains closed");
+        plan = CedModCompatibilityPolicy.Resolve(absentCedMod, true, false, false, true);
+        Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode,
+            "Possible owned patches prevent the Harmony absence fallback");
+        plan = CedModCompatibilityPolicy.Resolve(absentCedMod, false, false, false, true);
+        Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode,
+            "A disabled patch preference cannot override retained patch ownership");
+        plan = CedModCompatibilityPolicy.Resolve(absentCedMod, true, true, false, false);
+        Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode,
+            "An impossible applied-patch-without-runtime observation fails closed");
+
+        foreach (CedModCompatibilityReason reason in new[]
+                 {
+                     CedModCompatibilityReason.ConfigurationUnreadable,
+                     CedModCompatibilityReason.MultipleInstallations,
+                 })
+        {
+            plan = CedModCompatibilityPolicy.Resolve(
+                new CedModSelection(CedModPluginState.Unreadable, reason),
+                true, false, false, false);
+            Equal(CedModLookSyncMode.CedModUnsupported, plan.Mode,
+                "Harmony absence does not bypass ambiguous CedMod state: " + reason);
+        }
     }
 
     private static void TestEnumValueStability()

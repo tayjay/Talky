@@ -71,10 +71,10 @@ Assert-Equal -Label 'provenance platform' -Expected 'x64' -Actual ([string] $pro
 Assert-Equal -Label 'provenance solution' -Expected 'Talky.sln' -Actual ([string] $provenance.build.solution)
 Assert-Equal -Label 'provenance artifact name' -Expected $expectedArtifactName -Actual ([string] $provenance.artifact.name)
 Assert-Equal -Label 'provenance assembly name' -Expected $expectedAssemblyName -Actual ([string] $provenance.artifact.assemblyName)
-Assert-Equal -Label 'binding AssemblyVersion' -Expected '1.0.0.0' -Actual ([string] $provenance.artifact.assemblyVersion)
+Assert-Equal -Label 'binding AssemblyVersion' -Expected '1.0.0.2' -Actual ([string] $provenance.artifact.assemblyVersion)
 if (-not [bool] $provenance.build.deterministicRequested -or
     -not [bool] $provenance.build.continuousIntegrationBuild -or
-    [bool] $provenance.build.unsafeCodeAllowed -or
+    -not [bool] $provenance.build.unsafeCodeAllowed -or
     [bool] $provenance.build.deploymentEnabled -or
     -not [bool] $provenance.build.rebuildPerformed -or
     -not [bool] $provenance.build.testsPassed -or
@@ -84,7 +84,7 @@ if (-not [bool] $provenance.build.deterministicRequested -or
     [int] $provenance.build.reproducibility.pinnedToolchainRebuilds -ne 2 -or
     -not [bool] $provenance.build.reproducibility.artifactByteIdentical -or
     -not [bool] $provenance.build.reproducibility.canonicalLaneCopyVerified) {
-    throw 'Provenance must attest deterministic, safe, non-deploying rebuild and passing tests.'
+    throw 'Provenance must attest a deterministic, unsafe-enabled, non-deploying rebuild and passing tests.'
 }
 
 if ([bool] $provenance.source.dirty -and -not $AllowDirtyProvenance) {

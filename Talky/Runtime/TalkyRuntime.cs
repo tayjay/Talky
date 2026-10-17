@@ -498,6 +498,7 @@ public sealed class TalkyRuntime : IDisposable
             {
                 ProcessPendingConsumables(now);
                 ProcessPendingEmotions(now);
+                Plugin.Instance?.Settings?.ProcessPendingDefaultPresets(now);
                 if (!_policy.EnableHeadMotion && _activeLookTargets.Count != 0)
                     ExpirePendingLookCorrections(Time.frameCount);
             }

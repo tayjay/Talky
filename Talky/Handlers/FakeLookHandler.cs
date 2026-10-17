@@ -648,7 +648,10 @@ public class FakeLookHandler
         if (!TryGetLookOverride(ev.Player.ReferenceHub.netId, out var lookOverride) || lookOverride == null)
             return;
 
-        lookOverride.LastBusyTime = ev.Aiming ? float.MaxValue : Time.time;
+        if (ev.Aiming)
+            lookOverride.ClearOffsets();
+        else
+            lookOverride.LastBusyTime = Math.Max(lookOverride.LastBusyTime, Time.time);
     }
 
     private void OnStartUsingItem(PlayerUsingItemEventArgs ev)

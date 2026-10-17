@@ -7,7 +7,6 @@ using PlayerRoles.FirstPersonControl.Thirdperson;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers;
 using PlayerRoles.FirstPersonControl.Thirdperson.Subcontrollers.OverlayAnims;
 using Talky.Behaviours;
-using Talky.Bridges;
 using Talky.Performance;
 using UnityEngine;
 using UserSettings.ServerSpecific;
@@ -30,6 +29,9 @@ public sealed class SSTalkySettings
     private readonly HashSet<uint> _grabHeld = new HashSet<uint>();
     private readonly Dictionary<uint, float> _nextGrabAt = new Dictionary<uint, float>(128);
     private readonly Dictionary<uint, float> _nextEmotionAt = new Dictionary<uint, float>(128);
+    private readonly Dictionary<uint, PendingDefaultPreset> _pendingDefaultPresets =
+        new Dictionary<uint, PendingDefaultPreset>(128);
+    private readonly List<uint> _dueDefaultPresetKeys = new List<uint>(128);
 
     private SSKeybindSetting _grabKeybind;
     private SSDropdownSetting _defaultEmotionDropdown;
@@ -159,6 +161,7 @@ public sealed class SSTalkySettings
         _grabHeld.Remove(networkId);
         _nextGrabAt.Remove(networkId);
         _nextEmotionAt.Remove(networkId);
+        _pendingDefaultPresets.Remove(networkId);
     }
 
     public void ResetPlayerState()
@@ -166,6 +169,68 @@ public sealed class SSTalkySettings
         _grabHeld.Clear();
         _nextGrabAt.Clear();
         _nextEmotionAt.Clear();
+        _pendingDefaultPresets.Clear();
+        _dueDefaultPresetKeys.Clear();
+    }
+
+    internal void ProcessPendingDefaultPresets(float now)
+    {
+        if (!_active || _pendingDefaultPresets.Count == 0)
+            return;
+
+        _dueDefaultPresetKeys.Clear();
+        foreach (KeyValuePair<uint, PendingDefaultPreset> pair in _pendingDefaultPresets)
+        {
+            if (now >= pair.Value.DueTime)
+                _dueDefaultPresetKeys.Add(pair.Key);
+        }
+
+        for (int index = 0; index < _dueDefaultPresetKeys.Count; index++)
+        {
+            uint networkId = _dueDefaultPresetKeys[index];
+            if (!_pendingDefaultPresets.TryGetValue(networkId, out PendingDefaultPreset pending))
+                continue;
+
+            _pendingDefaultPresets.Remove(networkId);
+            Player player = pending.Player;
+            if (player == null || player.IsDestroyed || player.NetworkId != networkId)
+                continue;
+
+            if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
+                    networkId,
+                    out SpeechTracker tracker) == true)
+            {
+                tracker.RequestDefaultPreset(pending.Preset, now, EmotionCooldown);
+            }
+            else
+            {
+                ApplyUntrackedDefaultPreset(player, pending.Preset, now);
+            }
+        }
+
+        _dueDefaultPresetKeys.Clear();
+    }
+
+    private void ApplyUntrackedDefaultPreset(Player player, EmotionPresetType preset, float now)
+    {
+        _nextEmotionAt[player.NetworkId] = now + EmotionCooldown;
+        if (player.Emotion != preset)
+            player.Emotion = preset;
+    }
+
+    private void RequestUntrackedDefaultPreset(Player player, EmotionPresetType preset, float now)
+    {
+        uint networkId = player.NetworkId;
+        if (_nextEmotionAt.TryGetValue(networkId, out float emotionReadyAt) &&
+            now < emotionReadyAt)
+        {
+            _pendingDefaultPresets[networkId] =
+                new PendingDefaultPreset(player, preset, emotionReadyAt);
+            return;
+        }
+
+        _pendingDefaultPresets.Remove(networkId);
+        ApplyUntrackedDefaultPreset(player, preset, now);
     }
 
     public EmotionPresetType GetEmotionPreset(ReferenceHub hub)
@@ -201,9 +266,7 @@ public sealed class SSTalkySettings
         bool hasReceivedSetting,
         SSTwoButtonsSetting setting)
     {
-        return !hasReceivedSetting || setting == null
-            ? EnableTalkingByDefault
-            : setting.SyncIsB;
+        return !hasReceivedSetting || setting == null || setting.SyncIsB;
     }
 
     private void ProcessUserInput(ReferenceHub hub, ServerSpecificSettingBase setting)
@@ -275,32 +338,20 @@ public sealed class SSTalkySettings
 
             EmotionPresetType preset = (EmotionPresetType)selection;
 
-            // Update the spawn default immediately; rate-limit only the replicated write.
-            SpeechTracker tracker = null;
             if (Plugin.Instance?.Runtime?.TryGetSpeechTracker(
                     networkId,
-                    out tracker) == true)
+                    out SpeechTracker tracker) == true)
             {
-                tracker.SetDefaultPreset(preset);
-            }
-
-            if (_nextEmotionAt.TryGetValue(networkId, out float emotionReadyAt) &&
-                now < emotionReadyAt)
-            {
+                _pendingDefaultPresets.Remove(networkId);
+                tracker.RequestDefaultPreset(preset, now, EmotionCooldown);
                 return;
             }
 
-            _nextEmotionAt[networkId] = now + EmotionCooldown;
             Player player = Player.Get(hub);
+            if (player == null || player.IsDestroyed)
+                return;
 
-            if (tracker != null)
-            {
-                tracker.SetDefaultPreset(preset, applyImmediately: true);
-            }
-            else if (player != null && !player.IsDestroyed && player.Emotion != preset)
-            {
-                player.Emotion = preset;
-            }
+            RequestUntrackedDefaultPreset(player, preset, now);
 
             return;
         }
@@ -337,24 +388,18 @@ public sealed class SSTalkySettings
             return;
         }
 
-        if (!OverlayAnimationBridge.TryGetGrabAnimation(
-                subcontroller,
-                out object animationValue,
-                out Exception accessFailure))
+        OverlayAnimationsBase animation = subcontroller._overlayAnimations != null && subcontroller._overlayAnimations.Length > 1
+            ? subcontroller._overlayAnimations[1]
+            : null;
+        if( animation == null)
         {
-            if (accessFailure != null && !_grabAnimationAccessFailureLogged)
+            if (!_grabAnimationAccessFailureLogged)
             {
+                Logger.Error("Failed to access grab animation subcontroller.");
                 _grabAnimationAccessFailureLogged = true;
-                Logger.Error(
-                    "The grab animation is unavailable through the runtime metadata bridge: " +
-                    accessFailure);
             }
-
             return;
         }
-
-        if (!(animationValue is OverlayAnimationsBase animation))
-            return;
 
         animation.OnStarted();
         animation.SendRpc();
@@ -384,4 +429,18 @@ public sealed class SSTalkySettings
 
     private static bool IsValidEmotion(int selection) =>
         selection >= MinEmotion && selection <= MaxEmotion;
+
+    private readonly struct PendingDefaultPreset
+    {
+        public PendingDefaultPreset(Player player, EmotionPresetType preset, float dueTime)
+        {
+            Player = player;
+            Preset = preset;
+            DueTime = dueTime;
+        }
+
+        public Player Player { get; }
+        public EmotionPresetType Preset { get; }
+        public float DueTime { get; }
+    }
 }

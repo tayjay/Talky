@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using InventorySystem.Items;
+using InventorySystem.Items.Firearms;
+using InventorySystem.Items.Firearms.Modules;
 using Stopwatch = System.Diagnostics.Stopwatch;
 using LabApi.Features.Wrappers;
 using PlayerRoles.FirstPersonControl;
@@ -242,7 +245,7 @@ public sealed class LookOverride : MonoBehaviour
             ? Vector2.Lerp(_reactOffset, Vector2.zero, reactionLerp)
             : Vector2.zero;
 
-        if (now - _lastBusyTime < 0.1f)
+        if (IsHeadMovementBusy(now, _player.Inventory.CurInstance))
         {
             ClearOffsets();
             return 0;
@@ -316,6 +319,16 @@ public sealed class LookOverride : MonoBehaviour
         }
 
         return glanceCandidates;
+    }
+
+    internal bool IsHeadMovementBusy(float now, ItemBase heldItem)
+    {
+        // ADS ends when this firearm leaves the player's hands, even when holstering
+        // does not emit AimedWeapon(false). Keep finite action cooldowns independent.
+        return now - _lastBusyTime < 0.1f ||
+               (heldItem is Firearm firearm &&
+                firearm.TryGetModule(out IAdsModule ads) &&
+                ads.AdsTarget);
     }
 
     public void CauseReact(float damage)

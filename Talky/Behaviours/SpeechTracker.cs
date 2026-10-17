@@ -42,6 +42,10 @@ public sealed class SpeechTracker : MonoBehaviour
     private EmotionPresetType _appliedPreset;
     private bool _hasAppliedPreset;
     private bool _shouldAnimateFace = true;
+    private bool _hasPendingDefaultPreset;
+    private EmotionPresetType _defaultPresetBeforePendingSelection;
+    private float _nextDefaultPresetAt;
+    private float _defaultPresetCooldown;
     private int _decodeFailures;
     private float _decodeSuspendedUntil;
     private bool _disposed;
@@ -87,10 +91,13 @@ public sealed class SpeechTracker : MonoBehaviour
                 return;
 
             _shouldAnimateFace = value;
-            if (value)
+            _hasAppliedPreset = false;
+            _lastLevel = SpeechLevel.Init;
+            if (!value && !_disposed)
             {
-                _hasAppliedPreset = false;
-                _lastLevel = SpeechLevel.Init;
+                // Opting out of speech animation restores the selected idle face.
+                _overrideEndTime = 0f;
+                WriteEmotion(PresentedDefaultPreset);
             }
         }
     }
@@ -157,12 +164,11 @@ public sealed class SpeechTracker : MonoBehaviour
             if (_decoder != null)
                 return _decoder;
 
-            if (!VoiceDecoderBridge.TryGetDecoder(
-                    module,
-                    out _decoder,
-                    out Exception accessFailure))
+            _decoder = module.Decoder;
+            
+            if(_decoder == null)
             {
-                LogDecoderAccessFailure(accessFailure);
+                LogDecoderAccessFailure(null);
                 return null;
             }
 
@@ -197,8 +203,8 @@ public sealed class SpeechTracker : MonoBehaviour
             SSTalkySettings settings = Plugin.Instance?.Settings;
             if (settings != null)
             {
-                ShouldAnimateFace = settings.GetEnableTalking(_player.ReferenceHub);
                 defaultPreset = settings.GetEmotionPreset(_player.ReferenceHub);
+                ShouldAnimateFace = settings.GetEnableTalking(_player.ReferenceHub);
             }
         }
         catch (Exception exception)
@@ -214,6 +220,8 @@ public sealed class SpeechTracker : MonoBehaviour
     {
         ResetDecoderCache();
         RefreshSettings();
+        ResetPendingDefaultPreset();
+        WriteEmotion(defaultPreset);
         OverrideEmotion(defaultPreset, 0.1f);
         _decodeFailures = 0;
         _decodeSuspendedUntil = 0f;
@@ -247,6 +255,7 @@ public sealed class SpeechTracker : MonoBehaviour
 
         try
         {
+            ApplyPendingDefaultPreset(now);
             if (_overrideEndTime > now)
                 return;
 
@@ -258,7 +267,7 @@ public sealed class SpeechTracker : MonoBehaviour
 
             if (_lastLevel == SpeechLevel.Init)
             {
-                ApplyEmotion(defaultPreset);
+                ApplyEmotion(PresentedDefaultPreset);
                 _lastLevel = SpeechLevel.Reset;
             }
 
@@ -266,7 +275,7 @@ public sealed class SpeechTracker : MonoBehaviour
             {
                 if (_lastLevel != SpeechLevel.Reset || CurrentVolumeRatio != 0f)
                 {
-                    ApplyEmotion(defaultPreset);
+                    ApplyEmotion(PresentedDefaultPreset);
                     _lastLevel = SpeechLevel.Reset;
                     CurrentVolumeRatio = 0f;
                     CurrentHeadBobDrive = 0f;
@@ -459,12 +468,58 @@ public sealed class SpeechTracker : MonoBehaviour
         if (_overrideEndTime > Time.time)
             return;
 
-        // The setting write is rate-limited, but the next speech tick must still
-        // re-evaluate its current level instead of trusting the old emotion cache.
+        ApplySelectedDefaultPreset();
+    }
+
+    internal void RequestDefaultPreset(
+        EmotionPresetType preset,
+        float now,
+        float cooldownSeconds)
+    {
+        if (!_hasPendingDefaultPreset)
+            _defaultPresetBeforePendingSelection = defaultPreset;
+        defaultPreset = preset;
+        if (_disposed || _player == null)
+            return;
+
+        // Keep only the latest selection until this player's next permitted write.
+        _hasPendingDefaultPreset = true;
+        _defaultPresetCooldown = Math.Max(0f, cooldownSeconds);
+        ApplyPendingDefaultPreset(now);
+    }
+
+    private void ApplyPendingDefaultPreset(float now)
+    {
+        if (!_hasPendingDefaultPreset || now < _nextDefaultPresetAt ||
+            _overrideEndTime > now)
+        {
+            return;
+        }
+
+        ApplySelectedDefaultPreset();
+        _hasPendingDefaultPreset = false;
+        _nextDefaultPresetAt = now + _defaultPresetCooldown;
+    }
+
+    private void ApplySelectedDefaultPreset()
+    {
+        // Manual selection and restoring the idle face remain available when
+        // speech animation is disabled. The next tick still re-evaluates speech.
         _lastLevel = SpeechLevel.Init;
         _hasAppliedPreset = false;
-        ApplyEmotion(preset);
+        WriteEmotion(defaultPreset);
     }
+
+    private void ResetPendingDefaultPreset()
+    {
+        _hasPendingDefaultPreset = false;
+        _nextDefaultPresetAt = 0f;
+        _defaultPresetCooldown = 0f;
+    }
+
+    private EmotionPresetType PresentedDefaultPreset => _hasPendingDefaultPreset
+        ? _defaultPresetBeforePendingSelection
+        : defaultPreset;
 
     public void OverrideEmotion(EmotionPresetType preset, float durationSeconds)
     {
@@ -503,6 +558,7 @@ public sealed class SpeechTracker : MonoBehaviour
         _voicePresentation.Reset();
         _decodeFailures = 0;
         _decodeSuspendedUntil = 0f;
+        ResetPendingDefaultPreset();
         ResetAudibleSpeech();
         CurrentVolumeRatio = 0f;
         CurrentHeadBobDrive = 0f;
@@ -511,7 +567,7 @@ public sealed class SpeechTracker : MonoBehaviour
         _hasAppliedPreset = false;
         RecentSpeakerIndex = -1;
         HasGlanceSnapshot = false;
-        ApplyEmotion(defaultPreset);
+        WriteEmotion(defaultPreset);
     }
 
     public void Dispose()
@@ -545,7 +601,15 @@ public sealed class SpeechTracker : MonoBehaviour
 
     private void ApplyEmotion(EmotionPresetType preset)
     {
-        if (!ShouldAnimateFace || _player == null)
+        if (!ShouldAnimateFace)
+            return;
+
+        WriteEmotion(preset);
+    }
+
+    private void WriteEmotion(EmotionPresetType preset)
+    {
+        if (_player == null)
             return;
 
         if (_hasAppliedPreset && _appliedPreset == preset)

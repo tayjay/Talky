@@ -7,6 +7,7 @@ using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Threading;
+using HarmonyLib;
 using LabApi.Features.Console;
 using Mirror;
 using PlayerRoles;
@@ -106,17 +107,11 @@ internal static class HarmonyBridge
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static void RemovePatches()
     {
-        if (!TryPrepareHarmonyRuntime(out string compatibilityDetail))
-        {
-            if (RuntimeOwnershipPossible())
-            {
-                throw new InvalidOperationException(
-                    "Talky retains possible patch ownership but the bound Harmony runtime " +
-                    "cannot be used for safe cleanup: " + compatibilityDetail);
-            }
-
+        // Ownership is recorded only after admission bound the direct API. A later
+        // foreign Harmony load must not prevent cleanup through that same runtime.
+        // New apply transactions still run the strict global admission checks.
+        if (!RuntimeOwnershipPossible() && !TryPrepareHarmonyRuntime(out _))
             return;
-        }
 
         try
         {
@@ -152,10 +147,19 @@ internal static class HarmonyBridge
     private static bool TryPrepareHarmonyRuntime(out string detail)
     {
         Type resolvedHarmonyType = TryRequestHarmonyResolution();
+        if (resolvedHarmonyType == null)
+        {
+            // Mono caches a failed AssemblyRef on the requesting image. Entering the
+            // typed method before EXILED has loaded Harmony would make a later retry
+            // fail even after that exact dependency becomes available.
+            detail = "0Harmony is absent or its HarmonyLib.Harmony type could not be resolved";
+            return false;
+        }
+
         try
         {
             return HarmonyRuntimeBridge.TrySelectHarmonyRuntime(
-                resolvedHarmonyType?.Assembly,
+                resolvedHarmonyType.Assembly,
                 out detail);
         }
         catch (Exception exception)
@@ -172,13 +176,35 @@ internal static class HarmonyBridge
         {
             // Keep the type name string-based so Talky.dll remains enumerable when Harmony is
             // genuinely absent. The host's normal assembly resolver chooses the runtime binding.
-            return Type.GetType("HarmonyLib.Harmony, 0Harmony", false, false);
+            Type resolved = Type.GetType("HarmonyLib.Harmony, 0Harmony", false, false);
+            if (resolved != null)
+                return resolved;
         }
         catch
         {
-            // TryPrepareHarmonyRuntime provides the actionable compatibility diagnostic.
-            return null;
+            // A host resolver failure must not hide an already byte-loaded runtime.
         }
+
+        // EXILED byte-loads dependencies. Inspect already-loaded metadata when a
+        // host's name-based resolver does not expose that load context.
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            try
+            {
+                if (!string.Equals(assembly.GetName().Name, "0Harmony", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                Type candidate = assembly.GetType("HarmonyLib.Harmony", false, false);
+                if (candidate != null)
+                    return candidate;
+            }
+            catch
+            {
+                // An unrelated same-name assembly cannot prevent later candidates.
+            }
+        }
+
+        return null;
     }
 }
 
@@ -261,74 +287,21 @@ internal static class HarmonyRuntimeBridge
             nameof(SelectSerializedMouseLook),
             BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
 
-    private sealed class HarmonyApi
-    {
-        internal Assembly Assembly;
-        internal Type CodeInstructionType;
-        internal Type TypedInstructionEnumerableType;
-        internal ConstructorInfo HarmonyConstructor;
-        internal ConstructorInfo HarmonyMethodConstructor;
-        internal ConstructorInfo CodeInstructionConstructor;
-        internal MethodInfo PatchMethod;
-        internal MethodInfo UnpatchMethod;
-        internal MethodInfo GetPatchInfoMethod;
-        internal MethodInfo GetAllPatchedMethodsMethod;
-        internal ValueAccessor HarmonyMethodPriority;
-        internal ValueAccessor CodeInstructionOpcode;
-        internal ValueAccessor CodeInstructionOperand;
-        internal ValueAccessor CodeInstructionLabels;
-        internal ValueAccessor CodeInstructionBlocks;
-        internal ValueAccessor Prefixes;
-        internal ValueAccessor Transpilers;
-        internal ValueAccessor Owners;
-        internal ValueAccessor PatchOwner;
-        internal ValueAccessor PatchMethodMember;
-        internal object PatchTypeAll;
-        internal int PriorityLast;
-    }
-
-    private sealed class ValueAccessor
-    {
-        internal FieldInfo Field;
-        internal PropertyInfo Property;
-        internal Type ValueType => Field?.FieldType ?? Property?.PropertyType;
-
-        internal object GetValue(object instance) =>
-            Field != null ? Field.GetValue(instance) : Property.GetValue(instance, null);
-
-        internal void SetValue(object instance, object value)
-        {
-            if (Field != null)
-                Field.SetValue(instance, value);
-            else
-                Property.SetValue(instance, value, null);
-        }
-    }
-
     private static readonly object HarmonySelectionLock = new object();
-    private static readonly List<HarmonyApi> CompatibleHarmonyApis = new List<HarmonyApi>();
-    private static HarmonyApi _api;
-    private static HarmonyApi _resolverApi;
+    private static Assembly _harmonyAssembly;
     private static object _harmony;
     private static MethodInfo _target;
     private static MethodInfo _transpilerMethod;
     private static Type _codeInstructionType;
     private static Type _typedInstructionEnumerableType;
-    private static ConstructorInfo _codeInstructionConstructor;
-    private static ValueAccessor _codeInstructionOpcode;
-    private static ValueAccessor _codeInstructionOperand;
-    private static ValueAccessor _codeInstructionLabels;
-    private static ValueAccessor _codeInstructionBlocks;
     private static PatchTargetKind _targetKind;
     private static bool _patched;
     private static int _callbackFailureLogged;
     private static int _dynamicTranspilerGeneration;
 
     /// <summary>
-    /// Selects the Harmony implementation chosen by the host resolver when it exposes every API
-    /// capability Talky uses. Incompatible same-name assemblies are ignored. If the resolver did
-    /// not choose one, a single capability-compatible loaded implementation is accepted. Versions
-    /// are deliberately not gated.
+    /// Uses the CLR-bound Harmony contract. Metadata inspection admits compatible API shapes
+    /// without imposing a version gate; all runtime operations use direct typed calls.
     /// </summary>
     [MethodImpl(MethodImplOptions.NoInlining)]
     internal static bool TrySelectHarmonyRuntime(
@@ -337,70 +310,37 @@ internal static class HarmonyRuntimeBridge
     {
         lock (HarmonySelectionLock)
         {
-            List<string> observed = new List<string>();
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            Assembly boundAssembly = typeof(Harmony).Assembly;
+            if (!TryInspectHarmonyContract(boundAssembly, out detail))
+                return false;
+
+            if (resolverSelectedAssembly != null &&
+                !ReferenceEquals(resolverSelectedAssembly, boundAssembly) &&
+                !HasSameBinaryIdentity(resolverSelectedAssembly, boundAssembly))
             {
-                if (!IsHarmonyAssemblyName(assembly))
-                    continue;
-
-                HarmonyApi candidate = CompatibleHarmonyApis.FirstOrDefault(api =>
-                    ReferenceEquals(api.Assembly, assembly));
-                string reason = "compatible";
-                bool created = false;
-                if (candidate == null)
-                {
-                    try
-                    {
-                        created = TryCreateHarmonyApi(
-                            assembly,
-                            out candidate,
-                            out reason);
-                    }
-                    catch (Exception exception)
-                    {
-                        reason = "inspection failed: " + exception.GetType().Name;
-                    }
-                }
-                if (created)
-                    CompatibleHarmonyApis.Add(candidate);
-
-                if (candidate != null)
-                {
-                    if (ReferenceEquals(assembly, resolverSelectedAssembly))
-                        _resolverApi = candidate;
-                    observed.Add(DescribeAssembly(assembly) + ",capabilities=compatible");
-                }
-                else
-                {
-                    observed.Add(DescribeAssembly(assembly) + ",capabilities=" + reason);
-                }
-            }
-
-            List<HarmonyApi> logicalApis = GetLogicalHarmonyApis();
-            if (logicalApis.Count == 0)
-            {
-                detail = observed.Count == 0
-                    ? "0Harmony could not be resolved or is not loaded"
-                    : "no loaded 0Harmony assembly exposes Talky's required API capabilities; " +
-                      "observed=[" + string.Join("; ", observed) + "]";
+                detail = "The host resolver and CLR selected different Harmony runtimes";
                 return false;
             }
 
-            bool selectionIsOwned = _patched || _target != null || _harmony != null;
-            HarmonyApi selected = selectionIsOwned
-                ? _api
-                : logicalApis.FirstOrDefault(api => ReferenceEquals(api, _resolverApi)) ??
-                  logicalApis.FirstOrDefault(api => ReferenceEquals(api, _api)) ?? logicalApis
-                    .OrderBy(api => api.Assembly.IsDynamic ? 1 : 0)
-                    .ThenBy(
-                        api => SafeAssemblyLocation(api.Assembly),
-                        StringComparer.OrdinalIgnoreCase)
-                    .ThenBy(api => api.Assembly.FullName, StringComparer.Ordinal)
-                    .First();
-            SelectHarmonyApi(selected);
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (!IsHarmonyAssemblyName(assembly) ||
+                    ReferenceEquals(assembly, boundAssembly) ||
+                    HasSameBinaryIdentity(assembly, boundAssembly))
+                    continue;
+
+                if (TryInspectHarmonyContract(assembly, out _))
+                {
+                    detail = "Multiple distinct compatible Harmony binaries are loaded; " +
+                             "independent patch ownership cannot be verified through the " +
+                             "CLR-bound API: " + DescribeAssembly(assembly);
+                    return false;
+                }
+            }
+
+            _harmonyAssembly = boundAssembly;
             detail = "selected Harmony runtime is compatible (" +
-                     DescribeAssembly(_api.Assembly) + "); compatible_loaded=" +
-                     CompatibleHarmonyApis.Count + ",logical_runtimes=" + logicalApis.Count;
+                     DescribeAssembly(boundAssembly) + "); CLR-bound direct API";
             return true;
         }
     }
@@ -478,6 +418,7 @@ internal static class HarmonyRuntimeBridge
         }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool ApplyTarget(
         PatchTargetKind kind,
         MethodInfo target,
@@ -503,17 +444,16 @@ internal static class HarmonyRuntimeBridge
             RemovePatchesInternal();
 
             HarmonyBridge.MarkRuntimeOwnershipPossible();
-            _harmony = _api.HarmonyConstructor.Invoke(new object[] { OwnerId });
+            _harmony = new Harmony(OwnerId);
             _target = target;
             _targetKind = kind;
             _transpilerMethod = CreateHarmonyTranspiler();
 
-            object transpiler = _api.HarmonyMethodConstructor.Invoke(
-                new object[] { _transpilerMethod });
-            _api.HarmonyMethodPriority.SetValue(transpiler, _api.PriorityLast);
-            _api.PatchMethod.Invoke(
-                _harmony,
-                new[] { (object)target, null, null, transpiler, null });
+            HarmonyMethod transpiler = new HarmonyMethod(_transpilerMethod)
+            {
+                priority = Priority.Last,
+            };
+            ((Harmony)_harmony).Patch(target, transpiler: transpiler);
 
             if (!VerifyPatch(target))
                 throw new InvalidOperationException("Harmony did not report Talky's transpiler.");
@@ -535,7 +475,7 @@ internal static class HarmonyRuntimeBridge
             catch (Exception cleanupException)
             {
                 cleanupFailure = cleanupException;
-                _harmony ??= _api.HarmonyConstructor.Invoke(new object[] { OwnerId });
+                _harmony ??= new Harmony(OwnerId);
                 _target ??= target;
                 _targetKind = kind;
                 _patched = true;
@@ -643,44 +583,13 @@ internal static class HarmonyRuntimeBridge
             return false;
         }
 
-        List<Tuple<HarmonyApi, string>> matches = new List<Tuple<HarmonyApi, string>>();
-        foreach (HarmonyApi api in GetLogicalHarmonyApis())
+        if (!TryGetInstalledPrefixOwner(writeAll, sentinalPrefix, out sentinalOwner))
         {
-            try
-            {
-                if (TryGetInstalledPrefixOwner(
-                        api,
-                        writeAll,
-                        sentinalPrefix,
-                        out string owner))
-                {
-                    matches.Add(Tuple.Create(api, owner));
-                }
-            }
-            catch
-            {
-                // A different compatible copy may own CedMod's installed patch metadata.
-            }
-        }
-
-        if (matches.Count == 0)
-        {
-            detail = "CedMod's exact Sentinal WriteAll prefix is not installed in any " +
-                     "capability-compatible Harmony runtime";
+            detail = "CedMod's exact Sentinal WriteAll prefix is not installed in the " +
+                     "CLR-bound Harmony runtime";
             return false;
         }
 
-        Tuple<HarmonyApi, string> selected = matches.FirstOrDefault(match =>
-            ReferenceEquals(match.Item1, _resolverApi)) ??
-            matches.FirstOrDefault(match => ReferenceEquals(match.Item1, _api)) ??
-            matches.OrderBy(match => match.Item1.Assembly.IsDynamic ? 1 : 0)
-                .ThenBy(
-                    match => SafeAssemblyLocation(match.Item1.Assembly),
-                    StringComparer.OrdinalIgnoreCase)
-                .ThenBy(match => match.Item1.Assembly.FullName, StringComparer.Ordinal)
-                .First();
-        SelectHarmonyApi(selected.Item1);
-        sentinalOwner = selected.Item2;
         detail = null;
         return true;
     }
@@ -694,28 +603,18 @@ internal static class HarmonyRuntimeBridge
     private static MethodInfo CreateHarmonyTranspiler()
     {
         if (_transpilerMethod != null && _codeInstructionType != null &&
-            _typedInstructionEnumerableType != null &&
-            _codeInstructionConstructor != null && _codeInstructionOpcode != null &&
-            _codeInstructionOperand != null && _codeInstructionLabels != null &&
-            _codeInstructionBlocks != null)
+            _typedInstructionEnumerableType != null)
         {
             return _transpilerMethod;
         }
 
-        _codeInstructionType = _api.CodeInstructionType;
-        _typedInstructionEnumerableType = _api.TypedInstructionEnumerableType;
-        _codeInstructionConstructor = _api.CodeInstructionConstructor;
-        _codeInstructionOpcode = _api.CodeInstructionOpcode;
-        _codeInstructionOperand = _api.CodeInstructionOperand;
-        _codeInstructionLabels = _api.CodeInstructionLabels;
-        _codeInstructionBlocks = _api.CodeInstructionBlocks;
+        _codeInstructionType = typeof(CodeInstruction);
+        _typedInstructionEnumerableType = typeof(IEnumerable<CodeInstruction>);
         MethodInfo transformer = typeof(HarmonyInstructionTransformer).GetMethod(
             nameof(HarmonyInstructionTransformer.Transform),
             BindingFlags.Static | BindingFlags.Public);
 
-        if (_codeInstructionConstructor == null || _codeInstructionOpcode == null ||
-            _codeInstructionOperand == null || _codeInstructionLabels == null ||
-            _codeInstructionBlocks == null || transformer == null)
+        if (transformer == null)
         {
             throw new MissingMemberException(
                 "Harmony's CodeInstruction shape is incompatible with Talky's transpiler.");
@@ -750,35 +649,33 @@ internal static class HarmonyRuntimeBridge
             BindingFlags.Static | BindingFlags.Public | BindingFlags.DeclaredOnly);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static IEnumerable TransformInstructions(IEnumerable instructions, MethodBase original)
     {
         if (instructions == null)
             throw new ArgumentNullException(nameof(instructions));
         if (original == null || !Equals(original, _target) || _targetKind == PatchTargetKind.None)
             throw new InvalidOperationException("Talky's transpiler target state is unavailable.");
-        if (_codeInstructionType == null || _typedInstructionEnumerableType == null ||
-            _codeInstructionConstructor == null || _codeInstructionOpcode == null ||
-            _codeInstructionOperand == null || _codeInstructionLabels == null ||
-            _codeInstructionBlocks == null)
+        if (_codeInstructionType == null || _typedInstructionEnumerableType == null)
         {
             throw new InvalidOperationException("Talky's Harmony instruction bridge is unavailable.");
         }
 
-        List<object> source = new List<object>();
+        List<CodeInstruction> source = new List<CodeInstruction>();
         foreach (object instruction in instructions)
         {
-            if (instruction == null || !_codeInstructionType.IsInstanceOfType(instruction))
+            if (!(instruction is CodeInstruction typedInstruction))
             {
                 throw new InvalidOperationException(
                     "Harmony supplied an incompatible instruction stream.");
             }
 
-            source.Add(instruction);
+            source.Add(typedInstruction);
         }
 
-        foreach (object instruction in source)
+        foreach (CodeInstruction instruction in source)
         {
-            if (HasItems(_codeInstructionBlocks.GetValue(instruction)))
+            if (instruction.blocks.Count != 0)
             {
                 throw new InvalidOperationException(
                     "The look-sync helper contains an unexpected exception region.");
@@ -792,7 +689,7 @@ internal static class HarmonyRuntimeBridge
             if (!IsMouseLookLoad(source[index]) || !IsFpcSyncDataConstruction(source[index + 1]))
                 continue;
 
-            if (HasItems(_codeInstructionLabels.GetValue(source[index + 1])))
+            if (source[index + 1].labels.Count != 0)
             {
                 throw new InvalidOperationException(
                     "A look-sync constructor anchor is also a branch target.");
@@ -807,12 +704,10 @@ internal static class HarmonyRuntimeBridge
                 $"Expected {expectedAnchors} look-sync constructor anchor(s), found {anchors}.");
         }
 
-        IList rewritten = (IList)Activator.CreateInstance(
-            typeof(List<>).MakeGenericType(_codeInstructionType),
-            source.Count + anchors * 6);
+        List<CodeInstruction> rewritten = new List<CodeInstruction>(source.Count + anchors * 6);
         for (int index = 0; index < source.Count; index++)
         {
-            object instruction = source[index];
+            CodeInstruction instruction = source[index];
             rewritten.Add(instruction);
             if (index + 1 >= source.Count ||
                 !IsMouseLookLoad(instruction) ||
@@ -823,48 +718,35 @@ internal static class HarmonyRuntimeBridge
 
             // The live FpcMouseLook is already on the stack. These arguments select either that
             // object or a Talky-owned presentation proxy before the original constructor runs.
-            rewritten.Add(NewInstruction(OpCodes.Ldarg_0));
-            rewritten.Add(NewInstruction(OpCodes.Ldarg_1));
-            rewritten.Add(NewInstruction(OpCodes.Ldarg_2));
-            rewritten.Add(NewInstruction(OpCodes.Ldarg_3));
+            rewritten.Add(new CodeInstruction(OpCodes.Ldarg_0));
+            rewritten.Add(new CodeInstruction(OpCodes.Ldarg_1));
+            rewritten.Add(new CodeInstruction(OpCodes.Ldarg_2));
+            rewritten.Add(new CodeInstruction(OpCodes.Ldarg_3));
             rewritten.Add(_targetKind == PatchTargetKind.CedMod
-                ? NewInstruction(OpCodes.Ldarg_S, (byte)4)
-                : NewInstruction(OpCodes.Ldc_I4_0));
-            rewritten.Add(NewInstruction(OpCodes.Call, SelectorMethod));
+                ? new CodeInstruction(OpCodes.Ldarg_S, (byte)4)
+                : new CodeInstruction(OpCodes.Ldc_I4_0));
+            rewritten.Add(new CodeInstruction(OpCodes.Call, SelectorMethod));
         }
 
         return (IEnumerable)rewritten;
     }
 
-    private static object NewInstruction(OpCode opcode, object operand = null)
-    {
-        return _codeInstructionConstructor.Invoke(new[] { (object)opcode, operand });
-    }
-
-    private static bool HasItems(object value)
-    {
-        return value is ICollection collection && collection.Count != 0;
-    }
-
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool IsMouseLookLoad(object instruction)
     {
-        return instruction != null &&
-               (ReadOpcode(instruction) == OpCodes.Call ||
-                ReadOpcode(instruction) == OpCodes.Callvirt) &&
-               Equals(_codeInstructionOperand.GetValue(instruction), MouseLookGetter);
+        return instruction is CodeInstruction typedInstruction &&
+               (typedInstruction.opcode == OpCodes.Call ||
+                typedInstruction.opcode == OpCodes.Callvirt) &&
+               Equals(typedInstruction.operand, MouseLookGetter);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool IsFpcSyncDataConstruction(object instruction)
     {
-        return instruction != null &&
-               (ReadOpcode(instruction) == OpCodes.Newobj ||
-                ReadOpcode(instruction) == OpCodes.Call) &&
-               Equals(_codeInstructionOperand.GetValue(instruction), FpcSyncDataConstructor);
-    }
-
-    private static OpCode ReadOpcode(object instruction)
-    {
-        return (OpCode)_codeInstructionOpcode.GetValue(instruction);
+        return instruction is CodeInstruction typedInstruction &&
+               (typedInstruction.opcode == OpCodes.Newobj ||
+                typedInstruction.opcode == OpCodes.Call) &&
+               Equals(typedInstruction.operand, FpcSyncDataConstructor);
     }
 
     internal static FpcMouseLook SelectSerializedMouseLook(
@@ -897,36 +779,27 @@ internal static class HarmonyRuntimeBridge
         }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static void RemovePatchesInternal()
     {
         List<Exception> failures = new List<Exception>();
-        foreach (HarmonyApi api in GetLogicalHarmonyApis())
+        try
         {
-            try
-            {
-                object harmony = ReferenceEquals(api, _api) && _harmony != null
-                    ? _harmony
-                    : api.HarmonyConstructor.Invoke(new object[] { OwnerId });
-                if (_target != null)
-                {
-                    object targetPatches = GetPatchInfo(api, _target);
-                    if (HasOwner(api, targetPatches, OwnerId))
-                        Unpatch(api, harmony, _target);
-                }
+            Harmony harmony = _harmony as Harmony ?? new Harmony(OwnerId);
+            if (_target != null && HasOwner(Harmony.GetPatchInfo(_target), OwnerId))
+                harmony.Unpatch(_target, HarmonyPatchType.All, OwnerId);
 
-                foreach (MethodBase method in GetAllPatchedMethods(api).ToArray())
-                {
-                    object patches = GetPatchInfo(api, method);
-                    if (HasOwner(api, patches, OwnerId))
-                        Unpatch(api, harmony, method);
-                }
-            }
-            catch (Exception exception)
+            foreach (MethodBase method in Harmony.GetAllPatchedMethods().ToArray())
             {
-                failures.Add(new InvalidOperationException(
-                    "Harmony cleanup failed for " + DescribeAssembly(api.Assembly),
-                    exception));
+                if (HasOwner(Harmony.GetPatchInfo(method), OwnerId))
+                    harmony.Unpatch(method, HarmonyPatchType.All, OwnerId);
             }
+        }
+        catch (Exception exception)
+        {
+            failures.Add(new InvalidOperationException(
+                "Harmony cleanup failed for " + DescribeAssembly(_harmonyAssembly),
+                exception));
         }
 
         bool ownerRetained;
@@ -951,45 +824,39 @@ internal static class HarmonyRuntimeBridge
             }
 
             throw new AggregateException(
-                "Talky could not verify owner-scoped cleanup across all compatible Harmony " +
-                "runtimes.",
+                "Talky could not verify owner-scoped cleanup in the CLR-bound Harmony runtime.",
                 failures);
         }
 
         ClearPatchState();
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool HasHarmonyOwnerPatches()
     {
-        foreach (HarmonyApi api in GetLogicalHarmonyApis())
+        foreach (MethodBase method in Harmony.GetAllPatchedMethods())
         {
-            foreach (MethodBase method in GetAllPatchedMethods(api))
-            {
-                object patches = GetPatchInfo(api, method);
-                if (HasOwner(api, patches, OwnerId))
-                    return true;
-            }
+            if (HasOwner(Harmony.GetPatchInfo(method), OwnerId))
+                return true;
         }
 
         return false;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool VerifyPatch(MethodInfo target)
     {
-        object patches = GetPatchInfo(_api, target);
-        IEnumerable transpilers = patches == null
-            ? null
-            : _api.Transpilers.GetValue(patches) as IEnumerable;
-        if (transpilers == null)
+        Patches patches = Harmony.GetPatchInfo(target);
+        if (patches == null)
             return false;
 
-        foreach (object patch in transpilers)
+        foreach (Patch patch in patches.Transpilers)
         {
             if (string.Equals(
-                    _api.PatchOwner.GetValue(patch) as string,
+                    patch.owner,
                     OwnerId,
                     StringComparison.Ordinal) &&
-                Equals(_api.PatchMethodMember.GetValue(patch), _transpilerMethod))
+                Equals(patch.PatchMethod, _transpilerMethod))
             {
                 return true;
             }
@@ -1022,23 +889,21 @@ internal static class HarmonyRuntimeBridge
         string sentinalOwner,
         bool verified)
     {
-        Version harmonyVersion = _api.Assembly.GetName().Version;
+        Version harmonyVersion = _harmonyAssembly?.GetName().Version;
         string sentinal = kind == PatchTargetKind.CedMod
             ? $", sentinal_owner={sentinalOwner}"
             : string.Empty;
         return $"owner={OwnerId}, harmony={harmonyVersion}, " +
-               $"harmony_runtime=({DescribeAssembly(_api.Assembly)}), " +
+               $"harmony_runtime=({DescribeAssembly(_harmonyAssembly)}), " +
                $"mode={kind}{sentinal}, " +
                $"target={target.DeclaringType?.FullName}.{target.Name}, {profile}, " +
                $"verified={verified}";
     }
 
-    private static bool TryCreateHarmonyApi(
-        Assembly assembly,
-        out HarmonyApi api,
-        out string missingCapability)
+    // These queries inspect the contract used by the direct calls below. No discovered
+    // constructor, field, property, or method is invoked through reflection.
+    private static bool TryInspectHarmonyContract(Assembly assembly, out string detail)
     {
-        api = null;
         Type harmony = assembly.GetType("HarmonyLib.Harmony", false, false);
         Type harmonyMethod = assembly.GetType("HarmonyLib.HarmonyMethod", false, false);
         Type codeInstruction = assembly.GetType("HarmonyLib.CodeInstruction", false, false);
@@ -1046,157 +911,68 @@ internal static class HarmonyRuntimeBridge
         Type patch = assembly.GetType("HarmonyLib.Patch", false, false);
         Type patchType = assembly.GetType("HarmonyLib.HarmonyPatchType", false, false);
         Type priority = assembly.GetType("HarmonyLib.Priority", false, false);
-
         if (harmony == null || harmonyMethod == null || codeInstruction == null ||
             patches == null || patch == null || patchType == null || priority == null)
         {
-            missingCapability = "one or more required HarmonyLib runtime types are missing";
+            detail = "One or more required HarmonyLib runtime types are missing";
             return false;
         }
 
-        ConstructorInfo harmonyConstructor = harmony.GetConstructor(new[] { typeof(string) });
-        if (harmonyConstructor == null)
-        {
-            missingCapability = "Harmony(string) is missing";
-            return false;
-        }
-
+        const BindingFlags PublicInstance = BindingFlags.Instance | BindingFlags.Public;
+        const BindingFlags PublicStatic = BindingFlags.Static | BindingFlags.Public;
         MethodInfo patchMethod = FindMethod(
-            harmony,
-            "Patch",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            typeof(MethodBase),
-            harmonyMethod,
-            harmonyMethod,
-            harmonyMethod,
-            harmonyMethod);
-        if (patchMethod == null)
-        {
-            missingCapability = "Harmony.Patch(MethodBase, HarmonyMethod x4) is missing";
-            return false;
-        }
-
-        MethodInfo unpatchMethod = FindMethod(
-            harmony,
-            "Unpatch",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            typeof(MethodBase),
-            patchType,
-            typeof(string));
-        if (unpatchMethod == null)
-        {
-            missingCapability = "Harmony.Unpatch(MethodBase, HarmonyPatchType, string) is missing";
-            return false;
-        }
-
+            harmony, "Patch", PublicInstance, typeof(MethodBase), harmonyMethod,
+            harmonyMethod, harmonyMethod, harmonyMethod);
         MethodInfo getPatchInfo = FindMethod(
-            harmony,
-            "GetPatchInfo",
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
-            typeof(MethodBase));
-        if (getPatchInfo == null || !patches.IsAssignableFrom(getPatchInfo.ReturnType))
-        {
-            missingCapability = "Harmony.GetPatchInfo(MethodBase) is missing";
-            return false;
-        }
-
+            harmony, "GetPatchInfo", PublicStatic, typeof(MethodBase));
         MethodInfo getAllPatchedMethods = FindMethod(
-            harmony,
-            "GetAllPatchedMethods",
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-        if (getAllPatchedMethods == null ||
-            !typeof(IEnumerable).IsAssignableFrom(getAllPatchedMethods.ReturnType))
+            harmony, "GetAllPatchedMethods", PublicStatic);
+        if (harmony.GetConstructor(new[] { typeof(string) }) == null ||
+            patchMethod == null ||
+            FindMethod(harmony, "Unpatch", PublicInstance,
+                typeof(MethodBase), patchType, typeof(string)) == null ||
+            getPatchInfo?.ReturnType != patches ||
+            getAllPatchedMethods == null ||
+            !typeof(IEnumerable<MethodBase>).IsAssignableFrom(getAllPatchedMethods.ReturnType))
         {
-            missingCapability = "Harmony.GetAllPatchedMethods() is missing";
+            detail = "Harmony's public constructor, patch, cleanup, or inspection contract is incompatible";
             return false;
         }
 
-        ConstructorInfo harmonyMethodConstructor =
-            harmonyMethod.GetConstructor(new[] { typeof(MethodInfo) });
-        ValueAccessor harmonyMethodPriority = GetAccessor(harmonyMethod, "priority", true);
-        if (harmonyMethodConstructor == null ||
-            harmonyMethodPriority?.ValueType != typeof(int))
+        FieldInfo methodPriority = harmonyMethod.GetField("priority", PublicInstance);
+        if (harmonyMethod.GetConstructor(new[] { typeof(MethodInfo) }) == null ||
+            methodPriority?.FieldType != typeof(int) || methodPriority.IsInitOnly ||
+            codeInstruction.GetConstructor(new[] { typeof(OpCode), typeof(object) }) == null ||
+            codeInstruction.GetField("opcode", PublicInstance)?.FieldType != typeof(OpCode) ||
+            codeInstruction.GetField("operand", PublicInstance)?.FieldType != typeof(object) ||
+            codeInstruction.GetField("labels", PublicInstance)?.FieldType != typeof(List<Label>) ||
+            codeInstruction.GetField("blocks", PublicInstance) == null)
         {
-            missingCapability = "HarmonyMethod(MethodInfo) or its priority field is missing";
+            detail = "Harmony's direct instruction or transpiler member contract is incompatible";
             return false;
         }
 
-        const BindingFlags InstanceMembers =
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-        ConstructorInfo codeInstructionConstructor = codeInstruction.GetConstructor(
-            InstanceMembers,
-            null,
-            new[] { typeof(OpCode), typeof(object) },
-            null);
-        ValueAccessor opcode = GetAccessor(codeInstruction, "opcode", false);
-        ValueAccessor operand = GetAccessor(codeInstruction, "operand", false);
-        ValueAccessor labels = GetAccessor(codeInstruction, "labels", false);
-        ValueAccessor blocks = GetAccessor(codeInstruction, "blocks", false);
-        if (codeInstructionConstructor == null || opcode?.ValueType != typeof(OpCode) ||
-            operand?.ValueType != typeof(object) || labels == null || blocks == null)
+        FieldInfo prefixes = patches.GetField("Prefixes", PublicInstance);
+        FieldInfo transpilers = patches.GetField("Transpilers", PublicInstance);
+        PropertyInfo owners = patches.GetProperty("Owners", PublicInstance);
+        PropertyInfo patchMethodMember = patch.GetProperty("PatchMethod", PublicInstance);
+        FieldInfo priorityLast = priority.GetField("Last", PublicStatic);
+        if (prefixes == null || transpilers == null ||
+            !typeof(IEnumerable).IsAssignableFrom(prefixes.FieldType) ||
+            !typeof(IEnumerable).IsAssignableFrom(transpilers.FieldType) ||
+            owners?.GetGetMethod() == null ||
+            !typeof(IEnumerable<string>).IsAssignableFrom(owners.PropertyType) ||
+            patch.GetField("owner", PublicInstance)?.FieldType != typeof(string) ||
+            patchMethodMember?.PropertyType != typeof(MethodInfo) ||
+            patchMethodMember.GetGetMethod() == null ||
+            !patchType.IsEnum || !Enum.IsDefined(patchType, "All") ||
+            priorityLast?.FieldType != typeof(int) || !priorityLast.IsLiteral)
         {
-            missingCapability = "CodeInstruction's constructor or instruction metadata fields are missing";
+            detail = "Harmony's direct patch metadata contract is incompatible";
             return false;
         }
 
-        ValueAccessor prefixes = GetAccessor(patches, "Prefixes", false);
-        ValueAccessor transpilers = GetAccessor(patches, "Transpilers", false);
-        ValueAccessor owners = GetAccessor(patches, "Owners", false);
-        if (prefixes == null || transpilers == null || owners == null ||
-            !typeof(IEnumerable).IsAssignableFrom(prefixes.ValueType) ||
-            !typeof(IEnumerable).IsAssignableFrom(transpilers.ValueType) ||
-            !typeof(IEnumerable).IsAssignableFrom(owners.ValueType))
-        {
-            missingCapability = "Harmony patch metadata collections are missing";
-            return false;
-        }
-
-        ValueAccessor patchOwner = GetAccessor(patch, "owner", false);
-        ValueAccessor patchMethodMember = GetAccessor(patch, "PatchMethod", false);
-        if (patchOwner?.ValueType != typeof(string) ||
-            patchMethodMember?.ValueType != typeof(MethodInfo))
-        {
-            missingCapability = "Harmony patch owner or PatchMethod metadata is missing";
-            return false;
-        }
-
-        FieldInfo priorityLast = priority.GetField(
-            "Last",
-            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-        if (!patchType.IsEnum || !Enum.IsDefined(patchType, "All") ||
-            priorityLast?.FieldType != typeof(int))
-        {
-            missingCapability = "HarmonyPatchType.All or Priority.Last is missing";
-            return false;
-        }
-
-        api = new HarmonyApi
-        {
-            Assembly = assembly,
-            CodeInstructionType = codeInstruction,
-            TypedInstructionEnumerableType =
-                typeof(IEnumerable<>).MakeGenericType(codeInstruction),
-            HarmonyConstructor = harmonyConstructor,
-            HarmonyMethodConstructor = harmonyMethodConstructor,
-            CodeInstructionConstructor = codeInstructionConstructor,
-            PatchMethod = patchMethod,
-            UnpatchMethod = unpatchMethod,
-            GetPatchInfoMethod = getPatchInfo,
-            GetAllPatchedMethodsMethod = getAllPatchedMethods,
-            HarmonyMethodPriority = harmonyMethodPriority,
-            CodeInstructionOpcode = opcode,
-            CodeInstructionOperand = operand,
-            CodeInstructionLabels = labels,
-            CodeInstructionBlocks = blocks,
-            Prefixes = prefixes,
-            Transpilers = transpilers,
-            Owners = owners,
-            PatchOwner = patchOwner,
-            PatchMethodMember = patchMethodMember,
-            PatchTypeAll = Enum.Parse(patchType, "All"),
-            PriorityLast = (int)priorityLast.GetValue(null),
-        };
-        missingCapability = null;
+        detail = null;
         return true;
     }
 
@@ -1207,43 +983,6 @@ internal static class HarmonyRuntimeBridge
         params Type[] parameterTypes)
     {
         return type.GetMethod(name, flags, null, parameterTypes, null);
-    }
-
-    private static ValueAccessor GetAccessor(Type type, string name, bool writable)
-    {
-        const BindingFlags Members =
-            BindingFlags.Instance |
-            BindingFlags.Public |
-            BindingFlags.NonPublic;
-        FieldInfo field = type.GetField(name, Members);
-        if (field != null && (!writable || !field.IsInitOnly))
-            return new ValueAccessor { Field = field };
-
-        PropertyInfo property = type.GetProperty(name, Members);
-        if (property?.GetGetMethod(true) != null &&
-            (!writable || property.GetSetMethod(true) != null))
-        {
-            return new ValueAccessor { Property = property };
-        }
-
-        field = type.GetFields(Members).FirstOrDefault(candidate => string.Equals(
-            candidate.Name,
-            name,
-            StringComparison.OrdinalIgnoreCase));
-        if (field != null && (!writable || !field.IsInitOnly))
-            return new ValueAccessor { Field = field };
-
-        property = type.GetProperties(Members).FirstOrDefault(candidate => string.Equals(
-            candidate.Name,
-            name,
-            StringComparison.OrdinalIgnoreCase));
-        if (property?.GetGetMethod(true) != null &&
-            (!writable || property.GetSetMethod(true) != null))
-        {
-            return new ValueAccessor { Property = property };
-        }
-
-        return null;
     }
 
     private static bool IsHarmonyAssemblyName(Assembly assembly)
@@ -1261,86 +1000,37 @@ internal static class HarmonyRuntimeBridge
         }
     }
 
-    private static void SelectHarmonyApi(HarmonyApi selected)
-    {
-        if (selected == null)
-            throw new ArgumentNullException(nameof(selected));
-        if (ReferenceEquals(selected, _api))
-            return;
-        if (_patched || _target != null || _harmony != null)
-        {
-            throw new InvalidOperationException(
-                "Talky cannot change Harmony runtimes while patch ownership is active.");
-        }
-
-        _api = selected;
-        _transpilerMethod = null;
-        _codeInstructionType = null;
-        _typedInstructionEnumerableType = null;
-        _codeInstructionConstructor = null;
-        _codeInstructionOpcode = null;
-        _codeInstructionOperand = null;
-        _codeInstructionLabels = null;
-        _codeInstructionBlocks = null;
-    }
-
-    private static List<HarmonyApi> GetLogicalHarmonyApis()
-    {
-        return CompatibleHarmonyApis
-            .GroupBy(GetHarmonyBinaryIdentity, StringComparer.OrdinalIgnoreCase)
-            .Select(group =>
-            {
-                HarmonyApi current = group.FirstOrDefault(api => ReferenceEquals(api, _api));
-                if (current != null)
-                    return current;
-
-                HarmonyApi resolver = group.FirstOrDefault(api =>
-                    ReferenceEquals(api, _resolverApi));
-                if (resolver != null)
-                    return resolver;
-
-                return group
-                    .OrderBy(api => api.Assembly.IsDynamic ? 1 : 0)
-                    .ThenBy(
-                        api => SafeAssemblyLocation(api.Assembly),
-                        StringComparer.OrdinalIgnoreCase)
-                    .ThenBy(api => api.Assembly.FullName, StringComparer.Ordinal)
-                    .First();
-            })
-            .ToList();
-    }
-
-    private static string GetHarmonyBinaryIdentity(HarmonyApi api)
+    private static bool HasSameBinaryIdentity(Assembly first, Assembly second)
     {
         try
         {
-            AssemblyName name = api.Assembly.GetName();
-            Guid mvid = api.Assembly.ManifestModule.ModuleVersionId;
-            return name.Name + "|" + mvid.ToString("D");
+            return string.Equals(
+                       first.GetName().Name,
+                       second.GetName().Name,
+                       StringComparison.OrdinalIgnoreCase) &&
+                   first.ManifestModule.ModuleVersionId == second.ManifestModule.ModuleVersionId;
         }
         catch
         {
-            // If an implementation does not expose stable module identity, do not collapse it
-            // with another runtime whose independent patch state cannot be ruled out.
-            return (api.Assembly?.FullName ?? "<unknown>") + "|instance=" +
-                   RuntimeHelpers.GetHashCode(api.Assembly).ToString();
+            return false;
         }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool TrySelectRuntimeForTarget(
         PatchTargetKind kind,
         MethodBase target,
         out string detail)
     {
-        List<HarmonyApi> active = new List<HarmonyApi>();
         try
         {
-            foreach (HarmonyApi api in GetLogicalHarmonyApis())
-            {
-                object patches = GetPatchInfo(api, target);
-                if (HasAnyOwner(api, patches))
-                    active.Add(api);
-            }
+            // Force metadata access through the same direct API that will apply and remove
+            // this patch. An incompatible bound runtime must fail before ownership changes.
+            Patches patches = Harmony.GetPatchInfo(target);
+            if (patches != null && patches.Owners == null)
+                throw new InvalidOperationException("Harmony returned an invalid owner collection.");
+            detail = null;
+            return true;
         }
         catch (Exception exception)
         {
@@ -1348,132 +1038,44 @@ internal static class HarmonyRuntimeBridge
                      exception.GetType().Name + ": " + exception.Message;
             return false;
         }
-
-        if (active.Count > 1)
-        {
-            detail = "Harmony patch metadata for Talky's exact target is split across " +
-                     "multiple compatible runtimes: " +
-                     string.Join(
-                         "; ",
-                         active.Select(api => DescribeAssembly(api.Assembly)));
-            return false;
-        }
-
-        if (active.Count == 1)
-        {
-            if (kind == PatchTargetKind.Stock)
-                SelectHarmonyApi(active[0]);
-            else if (!ReferenceEquals(active[0], _api))
-            {
-                detail = "CedMod's selected Harmony runtime differs from the runtime holding " +
-                         "the process's active patch metadata";
-                return false;
-            }
-        }
-
-        detail = null;
-        return true;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static bool TryGetInstalledPrefixOwner(
-        HarmonyApi api,
         MethodBase target,
         MethodInfo expectedPrefix,
         out string owner)
     {
         owner = null;
-        object patches = GetPatchInfo(api, target);
-        IEnumerable prefixes = patches == null
-            ? null
-            : api.Prefixes.GetValue(patches) as IEnumerable;
-        if (prefixes == null)
+        Patches patches = Harmony.GetPatchInfo(target);
+        if (patches == null)
             return false;
 
-        foreach (object patch in prefixes)
+        foreach (Patch patch in patches.Prefixes)
         {
-            if (!Equals(api.PatchMethodMember.GetValue(patch), expectedPrefix))
+            if (!Equals(patch.PatchMethod, expectedPrefix))
                 continue;
 
-            owner = api.PatchOwner.GetValue(patch) as string;
+            owner = patch.owner;
             return true;
         }
 
         return false;
     }
 
-    private static object GetPatchInfo(HarmonyApi api, MethodBase target)
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool HasOwner(object patches, string owner)
     {
-        return api.GetPatchInfoMethod.Invoke(null, new object[] { target });
-    }
-
-    private static IEnumerable<MethodBase> GetAllPatchedMethods(HarmonyApi api)
-    {
-        object value = api.GetAllPatchedMethodsMethod.Invoke(null, null);
-        if (!(value is IEnumerable methods))
-            throw new InvalidOperationException("Harmony returned an invalid patched-method set.");
-
-        foreach (object method in methods)
-        {
-            if (!(method is MethodBase methodBase))
-            {
-                throw new InvalidOperationException(
-                    "Harmony returned a non-method patch metadata entry.");
-            }
-
-            yield return methodBase;
-        }
-    }
-
-    private static bool HasOwner(HarmonyApi api, object patches, string owner)
-    {
-        if (patches == null)
+        if (!(patches is Patches typedPatches))
             return false;
 
-        if (!(api.Owners.GetValue(patches) is IEnumerable owners))
-            return false;
-        foreach (object candidate in owners)
+        foreach (string candidate in typedPatches.Owners)
         {
-            if (string.Equals(candidate as string, owner, StringComparison.Ordinal))
+            if (string.Equals(candidate, owner, StringComparison.Ordinal))
                 return true;
         }
 
         return false;
-    }
-
-    private static bool HasAnyOwner(HarmonyApi api, object patches)
-    {
-        if (patches == null || !(api.Owners.GetValue(patches) is IEnumerable owners))
-            return false;
-
-        foreach (object candidate in owners)
-        {
-            if (candidate is string)
-                return true;
-        }
-
-        return false;
-    }
-
-    private static void Unpatch(HarmonyApi api, object harmony, MethodBase target)
-    {
-        api.UnpatchMethod.Invoke(
-            harmony,
-            new[] { (object)target, api.PatchTypeAll, OwnerId });
-    }
-
-    private static string SafeAssemblyLocation(Assembly assembly)
-    {
-        try
-        {
-            return assembly == null || assembly.IsDynamic ||
-                   string.IsNullOrWhiteSpace(assembly.Location)
-                ? "~"
-                : assembly.Location;
-        }
-        catch
-        {
-            return "~";
-        }
     }
 
     private static string DescribeAssembly(Assembly assembly)

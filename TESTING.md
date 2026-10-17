@@ -1,7 +1,7 @@
 # Testing Talky
 
-Two layers: deterministic unit tests that run offline, and a manual server verification that
-proves both framework paths actually load on a live SCP:SL server.
+Validation includes offline deterministic/patch tests, a contained Unity Mono member-access
+probe, and manual server verification that proves both framework paths load on a live server.
 
 Run the unit tests on every change. Run the server verification before releasing, and any time
 you touch plugin registration, the EXILED shim, the Harmony bridge, or the build/deploy config.
@@ -70,10 +70,10 @@ Then run the produced executable:
 Talky.Tests\bin\Release\Talky.Tests.exe
 ```
 
-A pass prints `PASS: <n> deterministic assertions.` and exits 0. Repeat for `Debug` and
-`EXILED`. Debug has its own plugin compilation. Release is the sole production compilation;
-the EXILED solution lane copies that exact plugin, core, and shim output while still compiling
-the test and benchmark projects with their EXILED configuration.
+A pass prints `PASS: <n> deterministic assertions.` and exits 0. Repeat for `Debug` when
+changing debug-specific behavior. Release is the sole production compilation and embeds
+`Talky.Core.dll` and `Talky.Exiled.Shim.dll.bin` inside `Talky.dll`. The legacy EXILED solution
+lane is only a compatibility alias; do not use it as a separate production build.
 
 The canonical guarantee applies to `Talky.sln` and the package scripts. A direct production-
 project build such as `msbuild Talky\Talky.csproj /p:Configuration=EXILED` is a legacy,
@@ -84,6 +84,32 @@ Some tests are order-coupled to enum layout. `PerformanceMetric` /
 `Talky.Tests/Program.cs` (`TestMetricCatalogAndSummary`) must be edited together; the test is
 the guard that tells you when they drift apart.
 
+### Direct game-member access
+
+Production projects compile with `AllowUnsafeBlocks=true` (`/unsafe`) against the pinned
+publicized game reference. Decoder and overlay accesses use direct game members. Metadata
+binding is retained for optional
+assemblies and Harmony/CedMod integration, but production assemblies must not import reflective
+member reads, writes, or invocation. Test fixtures use metadata to inspect and isolate runtime
+behavior.
+
+```powershell
+pwsh -File build/test-no-reflective-access.ps1 -Configuration Release
+pwsh -File build/test-direct-member-il.ps1 -Configuration Release
+pwsh -File build/test-mono-access.ps1 -MonoRuntimePath <server>\MonoBleedingEdge\EmbedRuntime\mono-2.0-bdwgc.dll -ScpSlManagedDir <server>\SCPSL_Data\Managed -ExiledDependenciesDir <dependencies> -CscPath <Roslyn>\csc.exe
+pwsh -File build/test-mono-harmony-load.ps1 -MonoRuntimePath <server>\MonoBleedingEdge\EmbedRuntime\mono-2.0-bdwgc.dll -ScpSlManagedDir <server>\SCPSL_Data\Managed -ExiledDependenciesDir <dependencies> -CscPath <Roslyn>\csc.exe
+```
+
+The raw-PE check verifies the shipped decoder and grab-animation member accesses without
+asking the desktop CLR to load Unity interface implementations. The Mono access probe uses
+the [Mono embedding API](https://www.mono-project.com/docs/advanced/embedding/) in a separate
+process to qualify direct access to stock game members with the production compiler flags. It does not
+start the game loop or enable the plugin, and it does not replace live voice/animation testing.
+The late-Harmony probe starts with Harmony unavailable, runs the ownership and cleanup checks
+used during construction, byte-loads the real dependency, then verifies binding, patch apply,
+ownership, and cleanup in that same Unity Mono process. It does not construct the plugin or
+initialize the server's filesystem configuration.
+
 ---
 
 ## Server verification
@@ -91,9 +117,25 @@ the guard that tells you when they drift apart.
 Both production lanes use the same **`Talky.dll`** bytes. Release is built once and copied to
 the EXILED output directory; only the deployment destination differs.
 
-> **Deploy one at a time.** Talky's constructor throws `DuplicateNameException` if it finds a
-> second assembly declaring the same plugin type. Leaving a copy in the LabAPI folder while
-> testing the EXILED build will fail the run.
+> **Deploy one at a time.** Shared lifecycle ownership refuses a second active instance while
+> allowing EXILED to reload disabled assembly copies. Leaving copies in both framework plugin
+> directories is unsupported.
+
+Current Talky also refuses construction and enable when a legacy `Talky.LabAPI`,
+`Talky.LabAPI.Debug`, or `Talky.EXILED` assembly is loaded or present in the configured plugin
+directories. This checks assembly identity, so renaming an old DLL does not bypass the guard.
+Disabled legacy DLLs must also be removed. Renaming the current universal DLL to an old
+filename does not make it legacy.
+
+With the default `prefer_harmony_look_sync: true`, a compatible Harmony runtime selects
+`StockHarmony`. If Harmony is absent, no Talky patch ownership remains, and CedMod uses stock
+sync or is absent, Talky selects the `StockSync` event path. An incompatible Harmony runtime,
+unresolved patch ownership, or CedMod fake sync still requires safe patch admission; those
+conditions must not silently select stock events.
+
+Harmony discovery must also recover in the same process: query and clean up while Harmony is
+absent, load its DLL, then apply and remove Talky's patch. A fresh process with Harmony already
+loaded does not cover the LabAPI-before-EXILED dependency-loading sequence.
 
 Success marker, identical in both cases:
 
@@ -133,15 +175,14 @@ returns early on `LoaderPlugin.Instance == null`.
 Stop the server, then delete `Talky.dll` from the LabAPI plugins directory. The next step must
 not run with two copies deployed.
 
-### 4. Build EXILED and deploy to EXILED
+### 4. Build Release and deploy the same embedded-shim artifact to EXILED
 
 ```bash
-msbuild Talky.sln /t:Rebuild /p:Configuration=EXILED /p:DeployPlugin=true
+msbuild Talky.sln /t:Rebuild /p:Configuration=Release /p:DeployPlugin=true /p:DeployDirectory=<exiled-plugins-dir>
 ```
 
-No `DeployDirectory` is needed. The EXILED configuration resolves its destination inside the
-`DeployBuiltPlugin` target, in order: `ExiledDeployDirectory`, then `EXILED_PLUGINS_DIR`, then
-the parent of `ExiledDependenciesDir`. Confirm `Deployed Talky.dll to <exiled-plugins-dir>`.
+The explicit destination selects EXILED deployment. Confirm `Deployed Talky.dll to
+<exiled-plugins-dir>`. The build and embedded payload are identical to LabAPI deployment.
 
 ### 5. Run the server and confirm EXILED enables it natively
 

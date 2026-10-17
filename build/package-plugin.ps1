@@ -382,6 +382,7 @@ if (-not $patchAssertionMatch.Success) {
 $harmonyPatchAssertionCount = [int] $patchAssertionMatch.Groups[1].Value
 
 & (Join-Path $repositoryRootFull 'build\test-artifact.ps1') -Configuration $Configuration -ScpSlManagedDir $ScpSlManagedDir -ExiledDependenciesDir $ExiledDependenciesDir -RepositoryRoot $repositoryRootFull
+& (Join-Path $repositoryRootFull 'build\test-no-reflective-access.ps1') -Configuration $canonicalConfiguration -RepositoryRoot $repositoryRootFull
 
 $embeddedModules = @(
     Get-BuiltModuleRecord -Path (Join-Path $repositoryRootFull "Talky.Core\bin\$Configuration\Talky.Core.dll") -EmbeddedResource 'Talky.Core.dll'
@@ -481,7 +482,7 @@ $provenance = [ordered]@{
         targetFramework = 'net48'
         deterministicRequested = $true
         continuousIntegrationBuild = $true
-        unsafeCodeAllowed = $false
+        unsafeCodeAllowed = $true
         deploymentEnabled = $false
         rebuildPerformed = $true
         testsPassed = $true

@@ -120,7 +120,7 @@ $dependencyRoots = if ($LabApiOnly -or
 }
 else {
     @(
-        (Join-Path $repositoryRootFull 'packages\ExMod.Exiled.9.14.2\lib\net48'),
+        (Join-Path $repositoryRootFull 'packages\ExMod.Exiled.9.15.2\lib\net48'),
         ([System.IO.Path]::GetFullPath($ScpSlManagedDir)),
         ([System.IO.Path]::GetFullPath($ExiledDependenciesDir)),
         (Join-Path $repositoryRootFull "Talky.PatchTests\bin\$Configuration"),
@@ -188,8 +188,8 @@ try {
                 '0Harmony',
                 [System.StringComparison]::OrdinalIgnoreCase)
         })
-    Assert-True ($harmonyAssemblyReferences.Count -eq 0) `
-        'Production Talky.dll must discover compatible Harmony runtimes dynamically instead of carrying a version-bound 0Harmony assembly reference.'
+    Assert-True ($harmonyAssemblyReferences.Count -eq 1) `
+        'Production Talky.dll must carry one compile-time Harmony contract; optional-runtime isolation is verified by the fresh-process absent-framework probes.'
 
     $resources = @($artifact.GetManifestResourceNames() | Sort-Object)
     Assert-True (($resources -join "`n") -eq "Talky.Core.dll`nTalky.Exiled.Shim.dll.bin") `
@@ -401,15 +401,13 @@ try {
             ([IDisposable] $enabledMonitor).Dispose()
         }
 
-        $plugin = [Activator]::CreateInstance($pluginType)
-        Assert-True ($null -ne $plugin) 'LabAPI-only plugin construction failed.'
         $unexpectedOptional = @([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {
                 $_.GetName().Name -eq '0Harmony' -or
                 $_.GetName().Name.StartsWith('Exiled.', [System.StringComparison]::OrdinalIgnoreCase)
             })
         Assert-True ($unexpectedOptional.Count -eq 0) `
-            'LabAPI-only type enumeration or construction unexpectedly loaded Harmony or EXILED.'
-        Write-Host 'Artifact validation PASS: fresh-process LabAPI-only type/signature enumeration and construction with Harmony/EXILED absent.'
+            'LabAPI-only metadata or monitor probes unexpectedly loaded Harmony or EXILED.'
+        Write-Host 'Artifact validation PASS: fresh-process LabAPI-only type/signature enumeration and monitor probes with Harmony/EXILED absent; host-dependent constructor covered by startup tests.'
         return
     }
 
@@ -453,7 +451,7 @@ try {
         -RepositoryRoot $repositoryRootFull `
         -LabApiOnly
     Assert-True ($LASTEXITCODE -eq 0) `
-        'Fresh-process LabAPI-only construction probe failed.'
+        'Fresh-process LabAPI-only metadata/monitor probe failed.'
 
     foreach ($presenceMode in @('LoaderOnly', 'ApiOnly')) {
         & $hostExecutable `
@@ -490,6 +488,13 @@ try {
         [System.IO.Path]::GetFullPath($dependencyPaths['0Harmony'])) | Out-Null
     Assert-True ([bool] $harmonyPresent.Invoke($null, @())) `
         'Harmony-present artifact probe did not detect the build-test assembly.'
+
+    # The same artifact already completed absent-first ownership/cleanup above.
+    # Admission itself inspects metadata only and must retry when the dependency appears.
+    $prepareHarmony = $harmonyBridge.GetMethod('TryPrepareHarmonyRuntime', $staticFlags)
+    $prepareArguments = @($null)
+    Assert-True ([bool] $prepareHarmony.Invoke($null, $prepareArguments)) `
+        "Late-loaded Harmony could not bind after absent-first inspection: $($prepareArguments[0])"
 
     # Harmony 2.2's detour engine is not compatible with the PowerShell host's newer CoreCLR,
     # so this artifact-only probe must not initialize or patch through Harmony here. The x64
